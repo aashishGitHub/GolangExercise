@@ -1,0 +1,2 @@
+# GolangExercise
+Learn golang daily
