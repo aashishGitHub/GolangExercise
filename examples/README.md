@@ -19,6 +19,7 @@ go run examples/01-basic-conversions.go
 
 ## Examples Overview
 
+### Type Conversions
 | File | Description |
 |------|-------------|
 | `01-basic-conversions.go` | Introduction to custom types and basic conversions |
@@ -27,6 +28,14 @@ go run examples/01-basic-conversions.go
 | `04-type-safety.go` | Demonstrates how custom types prevent bugs |
 | `05-string-conversions.go` | String ↔ bytes, numbers ↔ strings |
 | `06-practical-money.go` | Real-world example: Currency conversion |
+
+### Primitive Data Types
+| File | Description |
+|------|-------------|
+| `07-primitive-types.go` | Overview of all primitive data types in Go |
+| `08-binary-representation.go` | How everything is numeric at the binary level |
+| `09-invalid-data.go` | Examples of invalid or problematic data |
+| `10-user-input-validation.go` | Validating user input properly |
 
 ## Quick Start
 
@@ -42,12 +51,19 @@ done
 
 ## Learning Path
 
+### Beginner: Type Conversions
 1. Start with `01-basic-conversions.go` to understand the fundamentals
 2. Move to `02-numeric-conversions.go` for numeric type handling
 3. Study `03-custom-types-methods.go` to learn about methods
 4. Review `04-type-safety.go` to see the benefits
 5. Practice with `05-string-conversions.go` for string handling
 6. Apply knowledge with `06-practical-money.go` real-world scenario
+
+### Intermediate: Understanding Primitives
+7. Learn all types with `07-primitive-types.go`
+8. Understand binary representation with `08-binary-representation.go`
+9. See what can go wrong with `09-invalid-data.go`
+10. Learn validation with `10-user-input-validation.go`
 
 ## Notes
 
