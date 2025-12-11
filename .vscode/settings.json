@@ -1,0 +1,50 @@
+{
+  // Go-specific settings for learning environment
+  
+  // Linting settings
+  "go.lintOnSave": "workspace",
+  "go.lintTool": "golangci-lint",
+  "go.lintFlags": [
+    "--fast",
+    "--config=${workspaceFolder}/.golangci.yml"
+  ],
+  
+  // Formatting
+  "go.formatTool": "goimports",
+  "editor.formatOnSave": false,
+  
+  // Build settings
+  "go.buildOnSave": "off",
+  "go.vetOnSave": "off",
+  
+  // Diagnostics
+  "go.diagnostic.vulncheck": "Off",
+  
+  // Reduce noise for learning files
+  "go.lintFlags.examples": [
+    "--disable-all"
+  ],
+  
+  // File exclusions (don't hide, just reduce warnings)
+  "files.exclude": {
+    "**/.git": true,
+    "**/node_modules": true
+  },
+  
+  // Language-specific settings for Go
+  "[go]": {
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "never"
+    },
+    "editor.snippetSuggestions": "top",
+    "editor.formatOnSave": false
+  },
+  
+  // Disable certain problem matchers for learning code
+  "problems.decorations.enabled": true,
+  
+  // Comments
+  "//": "This configuration is optimized for learning Go",
+  "//": "For production code, enable stricter linting"
+}
+

@@ -31,10 +31,10 @@ func main() {
 	fmt.Println("4. Strings (sequences of byte values):")
 	var text string = "Hi"
 	bytes := []byte(text)
-	
+
 	fmt.Printf("   String: %q\n", text)
 	fmt.Printf("   Bytes (decimal): %v\n", bytes)
-	
+
 	fmt.Println("   Byte-by-byte breakdown:")
 	for i, b := range bytes {
 		fmt.Printf("      [%d] = %d (binary: %08b, char: %c)\n", i, b, b, b)
@@ -44,7 +44,7 @@ func main() {
 	// 5. SAME BITS, DIFFERENT INTERPRETATIONS
 	fmt.Println("5. Same Binary Value, Different Interpretations:")
 	var value uint8 = 65
-	
+
 	fmt.Printf("   Binary: %08b\n", value)
 	fmt.Printf("   As uint8: %d\n", value)
 	fmt.Printf("   As byte: %d\n", byte(value))
@@ -65,10 +65,12 @@ func main() {
 	fmt.Printf("   Character: %s\n", chinese)
 	fmt.Printf("   UTF-8 bytes: %v\n", []byte(chinese))
 	fmt.Printf("   Number of bytes: %d\n", len(chinese))
-	
+
 	// Get the rune (code point)
 	for _, r := range chinese {
 		fmt.Printf("   Unicode code point: %d (U+%X)\n", r, r)
 	}
 }
+
+
 

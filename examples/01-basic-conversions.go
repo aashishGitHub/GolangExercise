@@ -6,6 +6,7 @@ import "fmt"
 type UserId int
 type Speed float64
 
+
 func main() {
 	fmt.Println("=== Basic Type Conversions ===\n")
 
@@ -23,4 +24,6 @@ func main() {
 	fmt.Printf("Converted to int: %d (type: %T)\n", regularInt, regularInt)
 	fmt.Printf("Converted to float64: %.1f (type: %T)\n", regularFloat, regularFloat)
 }
+
+
 

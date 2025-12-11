@@ -9,6 +9,9 @@ Learn golang daily
 - [Type Conversions](docs/type-conversions.md) - Comprehensive guide to type conversions in Go
 - [Type Conversions Cheat Sheet](docs/type-conversions-cheatsheet.md) - Quick reference for common conversions
 
+### Development Setup
+- [Managing Linter Errors](docs/managing-linter-errors.md) - How to reduce linting noise in learning code
+
 ## 🎯 Examples
 
 The `examples/` folder contains practical, runnable examples:

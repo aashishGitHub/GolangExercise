@@ -1,0 +1,14 @@
+# Cursor IDE ignore file
+# Files and directories listed here will have reduced linting
+
+# Example files - learning code, don't need strict linting
+examples/*.go
+
+# Personal workspace for experimentation
+go-workspace/*.go
+
+# Common directories to ignore
+node_modules/
+vendor/
+.git/
+

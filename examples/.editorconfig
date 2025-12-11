@@ -1,0 +1,15 @@
+# EditorConfig for examples directory
+# This helps reduce linting strictness for learning files
+
+root = false
+
+[*.go]
+# More lenient settings for example files
+indent_style = tab
+indent_size = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Don't enforce strict formatting
+max_line_length = off
+
