@@ -31,15 +31,24 @@ You should see **fewer warnings** in:
 | [Primitive Cheat Sheet](docs/primitive-types-cheatsheet.md) | Quick reference |
 | [Type Conversions](docs/type-conversions.md) | Complete conversion guide |
 | [Conversions Cheat Sheet](docs/type-conversions-cheatsheet.md) | Quick reference |
+| [Concurrency](docs/concurrency.md) | Goroutines, channels, select, scheduler |
+| [Synchronization](docs/synchronization.md) | Mutex, atomic, WaitGroup, Once |
+| [Goroutine Problems](docs/goroutine-problems.md) | Leaks, races, deadlocks |
+| [Concurrency Patterns](docs/concurrency-patterns.md) | Pools, pipelines, resilience |
+| [Concurrency Cheat Sheet](docs/concurrency-cheatsheet.md) | Quick reference |
 | [Managing Linters](docs/managing-linter-errors.md) | Reduce error noise |
 
 ## 📂 Project Structure
 
 ```
 GolangExercise/
-├── examples/           # 10 runnable examples
+├── examples/           # 21 runnable examples
 │   ├── 01-06          # Type conversions
-│   └── 07-10          # Primitive types
+│   ├── 07-10          # Primitive types
+│   ├── 11-13          # Concurrency basics
+│   ├── 14-16          # Goroutine problems (leaks, races, deadlocks)
+│   ├── 17-19          # Concurrency patterns
+│   └── 20-21          # Distributed systems patterns
 ├── docs/              # Learning documentation
 ├── go-workspace/      # Your practice area
 └── README.md          # Full documentation
@@ -64,6 +73,34 @@ go run examples/09-invalid-data.go
 **Day 5: Validation**
 ```bash
 go run examples/10-user-input-validation.go
+```
+
+**Day 6-7: Concurrency Basics**
+```bash
+go run examples/11-goroutines-basics.go
+go run examples/12-channels-select.go
+go run examples/13-sync-primitives.go
+```
+
+**Day 8-9: What Goes Wrong**
+```bash
+go run examples/14-race-conditions.go          # see the wrong number
+go run -race examples/14-race-conditions.go    # see exactly where
+go run examples/15-goroutine-leaks.go
+go run examples/16-deadlocks.go
+```
+
+**Day 10-11: Patterns**
+```bash
+go run examples/17-worker-pool.go
+go run examples/18-pipeline-fanin-fanout.go
+go run examples/19-context-patterns.go
+```
+
+**Day 12: Production Concerns**
+```bash
+go run examples/20-distributed-patterns.go
+go run examples/21-graceful-shutdown.go
 ```
 
 ## 💡 If You Still See Linter Errors
@@ -108,6 +145,8 @@ cd go-workspace
 - **Linter issues?** → See [Managing Linter Errors](docs/managing-linter-errors.md)
 - **Type questions?** → See [Primitive Types](docs/primitive-types.md)
 - **Conversion help?** → See [Type Conversions Cheat Sheet](docs/type-conversions-cheatsheet.md)
+- **Goroutine trouble?** → See [Goroutine Problems](docs/goroutine-problems.md)
+- **Concurrency help?** → See [Concurrency Cheat Sheet](docs/concurrency-cheatsheet.md)
 
 ## ⚡ Quick Commands
 
@@ -139,6 +178,9 @@ go run main.go
 - **Conversions must be explicit** in Go
 - **Validate user input** in real applications
 - **Learning code ≠ production code** - different standards!
+- **Every goroutine needs a defined way to stop** - or it leaks
+- **Channels for handoff, locks for in-place state**
+- **Bound your concurrency** - never one goroutine per item
 
 ---
 
