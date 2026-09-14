@@ -105,9 +105,15 @@ services:
   # explicitly-not-dual-maintained comparison. Real DynamoDB semantics
   # (conditional writes, TransactWriteItems, ConditionalCheckFailedException),
   # not a Postgres-behind-a-facade stand-in.
+  # `profiles: [spike]` so a plain `docker compose up -d` does NOT start
+  # this for everyone — the Phase 12 comparison is explicitly non-blocking
+  # and not dual-maintained; most local runs have no reason to pull or run
+  # this container. Bring it up explicitly with:
+  #   docker compose --profile spike up -d dynamodb-local
   dynamodb-local:
     image: amazon/dynamodb-local:2.5.4
     command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+    profiles: ["spike"]
     ports:
       - "8000:8000"
 

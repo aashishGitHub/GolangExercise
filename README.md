@@ -1,6 +1,12 @@
 # GolangExercise
 Learn golang daily
 
+## 🏗️ Projects
+
+- [`ticket-booking/`](ticket-booking/README.md) - An event ticket-booking platform (Go + Postgres +
+  Redis + React), built to prove "a seat is never sold twice" under a stampede, with AWS
+  infrastructure simulated locally via Docker and Terraform. See its own README to get running.
+
 ## 📚 Documentation
 
 ### Type System
