@@ -20,6 +20,7 @@ type Querier interface {
 	// CopyFrom (sqlc :copyfrom) rather than one INSERT per row — the walk is
 	// 30,000+ rows for a large venue.
 	BulkInsertEventSeats(ctx context.Context, arg []BulkInsertEventSeatsParams) (int64, error)
+	CloseWSConnection(ctx context.Context, connectionID uuid.UUID) error
 	// ConfirmSeats: the single most important statement in the whole system.
 	// fence_token equality (not >=, see fixed gap #3) is the RedLock-question
 	// answer — a zombie holder whose hold was reclaimed and re-issued fails
@@ -75,6 +76,7 @@ type Querier interface {
 	InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditParams) error
 	InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error)
 	InsertRefund(ctx context.Context, arg InsertRefundParams) (Refund, error)
+	InsertWSConnection(ctx context.Context, arg InsertWSConnectionParams) error
 	// ListAvailableForBestAvailable: candidate seats for the contiguous-run
 	// scan (internal/inventory.BestAvailable) — row_id is included because
 	// ordinals are contiguous ACROSS a whole section, not just within one row
@@ -99,8 +101,23 @@ type Querier interface {
 	// correctness guarantee, docs/plan.md decision #2).
 	ListExpiredHolds(ctx context.Context) ([]ListExpiredHoldsRow, error)
 	ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHoldParams) ([]int64, error)
+	// ListSeatOrdinalsByEvent: the seat_id -> ordinal map the projector caches
+	// per event_id (in-memory, rebuilt on restart) — domain event payloads key
+	// by seat_id (the internal identity), but every wire structure (bitset,
+	// deltas) is ordinal-indexed (docs/plan.md decision #5).
+	ListSeatOrdinalsByEvent(ctx context.Context, eventID int64) ([]ListSeatOrdinalsByEventRow, error)
 	ListStuckOrders(ctx context.Context, arg ListStuckOrdersParams) ([]uuid.UUID, error)
 	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
+	// Phase 7 (internal/projector): domain events not yet applied by THIS
+	// consumer. processed_events dedup is scoped to (event_id, consumer_name)
+	// (migration 0005's comment), so the projector can replay independently of
+	// the EventBridge outbox relay — a crash mid-batch just re-applies from the
+	// same point, and the bitset write is itself idempotent (see projector.go).
+	// outbox_seq, NOT created_at (migration 0008): created_at alone is not a
+	// strict total order under rapid sequential inserts, and this consumer's
+	// correctness genuinely depends on applying transitions in real order —
+	// unlike the outbox relay, which doesn't care about delivery order.
+	ListUnprocessedDomainEvents(ctx context.Context, arg ListUnprocessedDomainEventsParams) ([]ListUnprocessedDomainEventsRow, error)
 	ListUnpublishedDomainEvents(ctx context.Context, rowLimit int32) ([]ListUnpublishedDomainEventsRow, error)
 	// ListVenueSeatsOrdered drives both cmd/event-publisher's ordinal
 	// assignment and layout.json/seats.bin rendering from the SAME walk, in the
@@ -109,6 +126,7 @@ type Querier interface {
 	// disagree (docs/plan.md "Event publish pipeline").
 	ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]ListVenueSeatsOrderedRow, error)
 	MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error
+	MarkEventProcessed(ctx context.Context, arg MarkEventProcessedParams) error
 	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)
 	ReallocateOrder(ctx context.Context, arg ReallocateOrderParams) error
 	// ReleaseHold: idempotent by construction — rowcount 0 is success (the
@@ -118,6 +136,7 @@ type Querier interface {
 	UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) error
 	UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) error
 	UpdateSagaStep(ctx context.Context, arg UpdateSagaStepParams) error
+	UpdateWSConnectionSeq(ctx context.Context, arg UpdateWSConnectionSeqParams) error
 }
 
 var _ Querier = (*Queries)(nil)

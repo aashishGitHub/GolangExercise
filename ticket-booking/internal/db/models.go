@@ -17,6 +17,7 @@ type DomainEvent struct {
 	Payload       []byte             `json:"payload"`
 	PublishedAt   pgtype.Timestamptz `json:"publishedAt"`
 	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
+	OutboxSeq     pgtype.Int8        `json:"outboxSeq"`
 }
 
 type Event struct {
@@ -162,4 +163,13 @@ type Venue struct {
 	City          string             `json:"city"`
 	LayoutVersion int32              `json:"layoutVersion"`
 	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
+}
+
+type WsConnection struct {
+	ConnectionID   uuid.UUID          `json:"connectionId"`
+	EventID        int64              `json:"eventId"`
+	UserSub        string             `json:"userSub"`
+	ConnectedAt    pgtype.Timestamptz `json:"connectedAt"`
+	LastSeqSent    int64              `json:"lastSeqSent"`
+	DisconnectedAt pgtype.Timestamptz `json:"disconnectedAt"`
 }

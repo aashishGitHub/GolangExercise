@@ -537,13 +537,125 @@ $ psql -c "SELECT p.payment_id FROM payments p WHERE p.status='CAPTURED'
 (0 rows)                            -- money-with-no-seat invariant
 ```
 
-## Phase 7 — Realtime: projector + WS deltas
-- [ ] `projector` → Redis bitset + `seq` + delta ring
-- [ ] `internal/wshub` (10-min idle timeout, 128 KB frame cap, ~1% random disconnects — the
-      fidelity patch)
-- [ ] `/ws`, migration 0007 `ws_connections`
-- [ ] **Verify:** real WS client receives real snapshot + delta bytes pasted, gap/resync handling,
-      Redis-down degrade to DB-scan
+## Phase 7 — Realtime: projector + WS deltas ✅ 2026-09-14
+- [x] `internal/wsproto`: the locked binary wire format (0x01 SNAPSHOT, 0x02 SPARSE). 0x03 RUN is
+      declared but not emitted — every domain event this system produces changes exactly one seat, so
+      every delta is naturally a 1-entry SPARSE frame; RUN only pays for itself for a bulk operation
+      (e.g. closing a whole section) that doesn't exist yet. Honest scope cut, not an oversight.
+- [x] `internal/projector`: polls `domain_events` for `seat.held`/`seat.released`/`seat.booked`,
+      idempotent per-consumer via `processed_events` (migration 0005 already had the table — Phase 7
+      is its first real consumer besides the outbox relay). Maintains, per event, a Redis-backed
+      packed 2-bit bitset + monotonic `seq` + a capped (200-entry) delta ring, and PUBLISHes each
+      delta on `{event:E}:notify`.
+- [x] `internal/wshub`: terminates `/ws`, sends an initial SNAPSHOT or (reconnect) a **coalesced**
+      gap-fill delta, then fans out live deltas — one Redis SUBSCRIBE per event with connections, not
+      one per connection. Local fidelity patches, all real, not just documented: 10-min idle timeout
+      (ping/pong + read deadline), 128 KB frame cap (enforced, though never exercised at today's
+      scale — our largest frame is a 7.5 KB snapshot), and a ~1% chaos disconnect on live writes.
+- [x] `/ws` wired into the router; migration 0007 `ws_connections` (the connection registry —
+      docs/plan.md decision #7: Postgres, not DynamoDB, mirroring the sibling project's own
+      low-scale-local drop).
+- [x] `GET /events/{id}/availability` upgraded: reads the Redis bitset first (with `X-Seatmap-Version`
+      = the real `seq`), falls back to the Phase 2 DB scan on ANY Redis error — Redis is a read cache
+      here, never the arbiter, so its outage degrades freshness of a GET, never correctness of a write.
+- [x] `scripts/ws-test-client`: a real Go WS client for manual byte-level verification (not a test
+      binary) — docs/plan.md's "paste the actual received bytes, not a description" requirement.
+- [x] **Verify:** snapshot + live delta + gap-fill (coalesced) + ring-overflow resync + chaos
+      disconnect + Redis-down degrade — all against the real running stack, real bytes pasted below.
+
+**Two real bugs found and fixed during Phase 7's own live-stack verification (not by unit tests):**
+
+1. **Truncated-bitset bug.** `internal/projector.apply()` did `GETRANGE`/`SETRANGE` directly on the
+   Redis bitset key without first guaranteeing it existed at full length. Redis auto-vivifies a
+   missing key on `SETRANGE`, but only out to the highest byte offset actually written — so a
+   projector processing events for an event nobody had ever fetched a snapshot for yet left a
+   **permanently truncated bitset** (`EnsureBitset`'s own `SETNX` seed never fires again once ANY key
+   exists, even a wrongly-sized one). Caught live: a fresh WS connection to a real 30,000-seat event
+   reported `seatCount=30000` but `packedLen=226` bytes (should be 7,500) — 8 stray domain events from
+   earlier phases' curl verification against `event_id=1` had been processed by `cmd/projector` before
+   any client had ever hit `/ws` or `/availability` for that event. **Fix:** `apply()` now calls
+   `EnsureBitset` first, every time, before any byte-level mutation.
+2. **`domain_events` ordering bug — a genuine architectural finding.** The overflow test (110
+   hold/release cycles = 220 real transitions) applied only 112–217 of them across repeated runs
+   (never exactly 220), with zero errors reported. Root cause: `ListUnpublishedDomainEvents` and
+   `ListUnprocessedDomainEvents` ordered by `created_at` (`TIMESTAMPTZ`) alone, which is **not a
+   strict total order** under rapid sequential inserts — two rows microseconds apart have no
+   guaranteed relative order from Postgres. A projector applying two same-direction transitions out of
+   their real order silently no-ops the second one via its own idempotency check — correct behavior
+   for an actual duplicate, wrong when the real cause was ordering. **Fix:** migration 0008 adds
+   `domain_events.outbox_seq BIGSERIAL`, a true monotonic tiebreaker assigned at insert time; both
+   queries now `ORDER BY outbox_seq`. After the fix, the same test applies exactly 220/220, every run.
+3. **A design bug caught in review, before it ever ran:** the original `ServeWS` flow built the
+   snapshot/gap-fill BEFORE subscribing to live deltas — any delta published in that narrow window
+   would have been silently lost forever, with nothing to detect it (unlike a ring gap, which at
+   least fails loudly into a resync). **Fixed before verification, not after:** subscribe first, so
+   anything published during snapshot construction queues in the connection's buffered channel
+   instead of vanishing; a client-side "ignore anything `<= my last applied seq`" is then the correct,
+   expected handling of ordinary at-least-once delivery, not a bug to route around.
+
+**Verification (real output, 2026-09-14, against the live stack — `docker compose up`, real
+cognito-local token, `event_id=1`'s real 30,000-seat venue):**
+```
+$ scripts/ws-test-client -event=1 -token=$TOKEN -count=1        # fresh connect, empty Redis
+--- frame 0: 7520 bytes raw ---
+raw hex (first 64 bytes): 01010100010000000000000000000000307500...
+SNAPSHOT layoutVersion=1 eventIDHash=1 seq=0 seatCount=30000 packedLen=7500
+# 20-byte header + 7500-byte packed bitset = 7520 total. Matches seatmap.ByteLen(30000) exactly.
+
+# --- live delta: hold ordinal 15000 while connected ---
+$ curl -X POST .../events/1/holds -d '{"seatOrdinals":[15000]}'
+{"holdId":"a2fd96f9-...","seats":[{"seatId":15001,"seatOrdinal":15000}], ...}
+--- frame 1: 16 bytes raw ---
+raw hex: 020101000000000000000100983a0040
+SPARSE seq=1 changes=[{15000 1}]        # 0x40003a98 -> state=1(HELD) ordinal=0x3a98=15000. Correct.
+
+# --- gap handling: disconnect, hold 3 more seats server-side, reconnect with sinceSeq=1 ---
+$ curl .../holds -d '{"seatOrdinals":[15001]}'; curl .../holds -d '{"seatOrdinals":[15002]}'; \
+  curl .../holds -d '{"seatOrdinals":[15003]}'
+$ scripts/ws-test-client -event=1 -token=$TOKEN -sinceSeq=1 -count=1
+--- frame 0: 24 bytes raw ---
+raw hex: 020104000000000000000300993a00409a3a00409b3a0040
+SPARSE seq=4 changes=[{15001 1} {15002 1} {15003 1}]   # ONE combined frame covering all 3, per
+                                                         # docs/plan.md's exact wording, not 3 frames
+
+# --- ring overflow: 121 more hold/release cycles push seq to 246, ring caps at 200 entries ---
+$ redis-cli GET '{event:1}:seq'   -> 246
+$ redis-cli LLEN '{event:1}:deltas' -> 200        # capped, as designed
+$ scripts/ws-test-client -event=1 -token=$TOKEN -sinceSeq=4 -count=1   # seq 4 long evicted from ring
+--- frame 0: 7520 bytes raw ---
+SNAPSHOT layoutVersion=1 eventIDHash=1 seq=246 seatCount=30000 packedLen=7500
+# Exactly ONE resync (a full snapshot), not a doomed partial replay — the overflow contract holds.
+
+# --- chaos disconnect: 300-frame live stream, ~1% forced disconnect on writes ---
+$ scripts/ws-test-client -event=1 -token=$TOKEN -count=300   (curl-holding 300 seats concurrently)
+... 242 frames received cleanly ...
+2026/09/14 15:44:40 read frame 243: websocket: close 1006 (abnormal closure): unexpected EOF
+$ grep -c "chaos-disconnecting" ticketing-server.log -> 1
+# Fired once in ~243 writes (~0.4%, consistent with the 1% target at this sample size) — a REAL
+# abnormal closure a client's reconnect logic must handle, exercised on every local run.
+
+# --- Redis-down degrade: /availability must still 200 from Postgres ---
+$ curl -i .../events/1/availability          # Redis up
+HTTP/1.1 200 OK
+X-Seat-Count: 30000
+X-Seatmap-Version: 246
+$ docker stop ticketing-redis-1
+$ curl -i .../events/1/availability          # Redis down
+HTTP/1.1 200 OK
+X-Seat-Count: 30000
+# X-Seatmap-Version absent — DB-scan fallback, not faked. Same ETag both times: identical seat data,
+# just served by two different code paths. Redis is a cache, never the arbiter (decision #1) — this
+# is the read-path proof of it.
+$ docker start ticketing-redis-1             # recovers cleanly, X-Seatmap-Version returns
+```
+
+**Not implemented in Phase 7, honestly scoped:** the 0x03 RUN frame type (explained above); a
+multi-replica `MULTI`/`EXEC` Lua script around `apply()`'s byte-write + seq-INCR pair — with a single
+in-process projector and no concurrent writer to the same event, that race window is theoretical here,
+not fixed with a script it can't currently exercise; the frontend's WS client (Phase 4's map still
+polls `/availability` — wiring the browser to `/ws` is real future work, not done here); a full
+10-minute idle-timeout wall-clock test (verified by code review + the ping/pong wiring, not by
+actually waiting 10 minutes in CI).
 
 ## Phase 8 — Virtual waiting room + AIMD
 - [ ] `internal/waitingroom`, queue routes, `X-Admission-Token` middleware, AIMD controller

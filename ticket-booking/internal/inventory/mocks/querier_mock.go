@@ -73,6 +73,20 @@ func (mr *MockQuerierMockRecorder) BulkInsertEventSeats(ctx, arg any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BulkInsertEventSeats", reflect.TypeOf((*MockQuerier)(nil).BulkInsertEventSeats), ctx, arg)
 }
 
+// CloseWSConnection mocks base method.
+func (m *MockQuerier) CloseWSConnection(ctx context.Context, connectionID uuid.UUID) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CloseWSConnection", ctx, connectionID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CloseWSConnection indicates an expected call of CloseWSConnection.
+func (mr *MockQuerierMockRecorder) CloseWSConnection(ctx, connectionID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloseWSConnection", reflect.TypeOf((*MockQuerier)(nil).CloseWSConnection), ctx, connectionID)
+}
+
 // ConfirmSeats mocks base method.
 func (m *MockQuerier) ConfirmSeats(ctx context.Context, arg db.ConfirmSeatsParams) (int64, error) {
 	m.ctrl.T.Helper()
@@ -473,6 +487,20 @@ func (mr *MockQuerierMockRecorder) InsertRefund(ctx, arg any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertRefund", reflect.TypeOf((*MockQuerier)(nil).InsertRefund), ctx, arg)
 }
 
+// InsertWSConnection mocks base method.
+func (m *MockQuerier) InsertWSConnection(ctx context.Context, arg db.InsertWSConnectionParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertWSConnection", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertWSConnection indicates an expected call of InsertWSConnection.
+func (mr *MockQuerierMockRecorder) InsertWSConnection(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertWSConnection", reflect.TypeOf((*MockQuerier)(nil).InsertWSConnection), ctx, arg)
+}
+
 // ListAvailableForBestAvailable mocks base method.
 func (m *MockQuerier) ListAvailableForBestAvailable(ctx context.Context, arg db.ListAvailableForBestAvailableParams) ([]db.ListAvailableForBestAvailableRow, error) {
 	m.ctrl.T.Helper()
@@ -578,6 +606,21 @@ func (mr *MockQuerierMockRecorder) ListSeatIDsForHold(ctx, arg any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSeatIDsForHold", reflect.TypeOf((*MockQuerier)(nil).ListSeatIDsForHold), ctx, arg)
 }
 
+// ListSeatOrdinalsByEvent mocks base method.
+func (m *MockQuerier) ListSeatOrdinalsByEvent(ctx context.Context, eventID int64) ([]db.ListSeatOrdinalsByEventRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSeatOrdinalsByEvent", ctx, eventID)
+	ret0, _ := ret[0].([]db.ListSeatOrdinalsByEventRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSeatOrdinalsByEvent indicates an expected call of ListSeatOrdinalsByEvent.
+func (mr *MockQuerierMockRecorder) ListSeatOrdinalsByEvent(ctx, eventID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSeatOrdinalsByEvent", reflect.TypeOf((*MockQuerier)(nil).ListSeatOrdinalsByEvent), ctx, eventID)
+}
+
 // ListStuckOrders mocks base method.
 func (m *MockQuerier) ListStuckOrders(ctx context.Context, arg db.ListStuckOrdersParams) ([]uuid.UUID, error) {
 	m.ctrl.T.Helper()
@@ -606,6 +649,21 @@ func (m *MockQuerier) ListStuckPayments(ctx context.Context, arg db.ListStuckPay
 func (mr *MockQuerierMockRecorder) ListStuckPayments(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStuckPayments", reflect.TypeOf((*MockQuerier)(nil).ListStuckPayments), ctx, arg)
+}
+
+// ListUnprocessedDomainEvents mocks base method.
+func (m *MockQuerier) ListUnprocessedDomainEvents(ctx context.Context, arg db.ListUnprocessedDomainEventsParams) ([]db.ListUnprocessedDomainEventsRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListUnprocessedDomainEvents", ctx, arg)
+	ret0, _ := ret[0].([]db.ListUnprocessedDomainEventsRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListUnprocessedDomainEvents indicates an expected call of ListUnprocessedDomainEvents.
+func (mr *MockQuerierMockRecorder) ListUnprocessedDomainEvents(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListUnprocessedDomainEvents", reflect.TypeOf((*MockQuerier)(nil).ListUnprocessedDomainEvents), ctx, arg)
 }
 
 // ListUnpublishedDomainEvents mocks base method.
@@ -650,6 +708,20 @@ func (m *MockQuerier) MarkDomainEventPublished(ctx context.Context, eventID uuid
 func (mr *MockQuerierMockRecorder) MarkDomainEventPublished(ctx, eventID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkDomainEventPublished", reflect.TypeOf((*MockQuerier)(nil).MarkDomainEventPublished), ctx, eventID)
+}
+
+// MarkEventProcessed mocks base method.
+func (m *MockQuerier) MarkEventProcessed(ctx context.Context, arg db.MarkEventProcessedParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkEventProcessed", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkEventProcessed indicates an expected call of MarkEventProcessed.
+func (mr *MockQuerierMockRecorder) MarkEventProcessed(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkEventProcessed", reflect.TypeOf((*MockQuerier)(nil).MarkEventProcessed), ctx, arg)
 }
 
 // MinEventPriceCents mocks base method.
@@ -750,4 +822,18 @@ func (m *MockQuerier) UpdateSagaStep(ctx context.Context, arg db.UpdateSagaStepP
 func (mr *MockQuerierMockRecorder) UpdateSagaStep(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSagaStep", reflect.TypeOf((*MockQuerier)(nil).UpdateSagaStep), ctx, arg)
+}
+
+// UpdateWSConnectionSeq mocks base method.
+func (m *MockQuerier) UpdateWSConnectionSeq(ctx context.Context, arg db.UpdateWSConnectionSeqParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateWSConnectionSeq", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateWSConnectionSeq indicates an expected call of UpdateWSConnectionSeq.
+func (mr *MockQuerierMockRecorder) UpdateWSConnectionSeq(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateWSConnectionSeq", reflect.TypeOf((*MockQuerier)(nil).UpdateWSConnectionSeq), ctx, arg)
 }
