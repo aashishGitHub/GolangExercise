@@ -3,10 +3,13 @@ name: ticketing-ci
 # Scoped to ticket-booking/ so this doesn't run for unrelated changes
 # elsewhere in this monorepo. Test + build only — no `terraform apply`, no
 # Lambda/S3/CloudFront deploy step. Mirrors fieldsync-ci.yml's structure.
-# The lambda-cross-compile job is added once Phase 11 lands (see
-# ticket-booking/MILESTONES.md). Note: `web`'s vitest suite covers the
-# model/a11y unit tests only — the Playwright E2E suite needs the full
-# docker-compose stack + a seeded venue/event and isn't run in CI yet.
+# terraform-validate now depends on lambda-build (Phase 11): modules/
+# compute's aws_lambda_function resources reference build/<name>.zip via
+# filebase64sha256, so `terraform validate` needs the real zips to exist
+# first — the same ordering `make tf-validate` already enforces locally.
+# Note: `web`'s vitest suite covers the model/a11y unit tests only — the
+# Playwright E2E suite needs the full docker-compose stack + a seeded
+# venue/event and isn't run in CI yet.
 on:
   push:
     paths: ["ticket-booking/**"]
@@ -51,6 +54,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ticket-booking/go.mod
+      # Cross-compiles every cmd/*-lambda entrypoint to provided.al2023/
+      # arm64 and zips it into modules/compute/build/ — proves the build
+      # path actually works, not just that the Go code compiles for the
+      # host OS/arch, and satisfies filebase64sha256's real-file
+      # requirement before validate runs below.
+      - run: make build-lambda
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.0"

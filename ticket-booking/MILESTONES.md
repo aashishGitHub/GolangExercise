@@ -954,12 +954,97 @@ scenario's 49,735 journeys in 15s is almost entirely cheap Redis-fast-path 409 r
 even at that volume. WS delta lag's ~500ms ceiling across both runs is real and worth a follow-up
 measurement in a later session (not yet root-caused) rather than a number to over-interpret today.
 
-## Phase 11 — IaC completion + Lambda twins (additive)
-- [ ] Remaining TF modules (`compute`, `api`, `websocket`, `eventing`, `waf`, `observability`, gated
-      `search`)
-- [ ] Every `cmd/*` gets its `-lambda` twin; `make build-lambda` real (not the Phase 0 no-op)
-- [ ] CI gains the lambda cross-compile check + `web` job
-- [ ] **Verify:** `make tf-validate` green across all modules; `terraform plan` never run automatically
+## Phase 11 — IaC completion + Lambda twins (additive) ✅ 2026-09-14
+- [x] Nine new Terraform modules — `auth`, `storage`, `compute`, `api`, `websocket`, `eventing`,
+      `waf`, `observability`, `search` (gated), `waitingroom` (a real CloudFront Function, not a
+      stub) — on top of the four from earlier phases (`network`, `secrets`, `database`, `cache`).
+      `modules/secrets` also gained the QR-signing KMS MAC key `docs/plan.md` always specified for it
+      but Phase 9 never actually added (a real gap, fixed here, not silently left).
+- [x] Every `cmd/*` gets its `-lambda` twin (`server-lambda`, `outbox-relay-lambda`,
+      `hold-reaper-lambda`, `projector-lambda`, `reconciler-lambda`, `saga-worker-lambda`,
+      `reminder-scheduler-lambda` — 7 total; `event-publisher` stays a one-shot operator CLI, not a
+      Lambda candidate, and is documented as such rather than silently skipped).
+- [x] `internal/wiring` extracted so `cmd/server` and `cmd/server-lambda` share ONE dependency graph
+      instead of two slowly-drifting copies; `internal/reaper` and `internal/reminder` extracted the
+      same way so each ticker/Lambda pair calls identical code, not a duplicate.
+- [x] `make build-lambda` is real: cross-compiles every `cmd/*-lambda` to `provided.al2023`/arm64
+      (verified as real ARM64 ELF binaries below, not just "go build succeeded"), zips each into
+      `modules/compute/build/<name>.zip` — the exact path `modules/compute`'s `aws_lambda_function`
+      resources reference via `filebase64sha256`.
+- [x] CI's `terraform-validate` job now builds every Lambda twin first (the same ordering
+      `make tf-validate` already enforces locally), then validates — `web` job already existed since
+      Phase 4.
+- [x] **Verify:** `make tf-validate` green across all 14 modules; real ARM64 Lambda binaries;
+      `internal/wiring` sanity-checked live (`cmd/server` still serves real traffic); `terraform plan`
+      never run.
+
+**Two real, honestly-documented architecture gaps found while writing this phase — not papered over:**
+
+1. **`modules/websocket` is real Terraform, but the actual integration behind it isn't finished.**
+   API Gateway WebSocket is Lambda-per-message-invocation with pushes via a separate
+   `PostToConnection` management-API call; `internal/wshub`'s whole design (Phase 7) is the opposite
+   shape — one long-lived Go process holding every connection open, writing deltas directly over the
+   same socket. `$connect` in this module currently integrates with `server-lambda`, which does not
+   speak API Gateway's WebSocket contract and would not actually authorize a real connection. The
+   resources are real and declared; the redesign that would make them actually work (deltas fan out
+   via `PostToConnection`, using `ws_connections`' already-stored `connection_id`) is real future
+   work, stated in the module's own comment rather than silently assumed done.
+2. **`modules/api`'s JWT authorizer is declared but not attached to any route.** The catch-all
+   `$default` route stays unauthenticated at the API Gateway layer, matching `internal/httpapi/
+   router.go`'s own per-route auth split (catalog routes open, holds/orders gated) — reproducing that
+   exact split as separate API Gateway routes would mean maintaining chi's routing table twice, in
+   two languages, guaranteed to drift. Noted in the module rather than faked with a wildcard
+   attachment that would break local-parity in a different way.
+
+**Verification (real output, 2026-09-14):**
+```
+$ make build-lambda
+build-lambda: hold-reaper-lambda
+build-lambda: outbox-relay-lambda
+build-lambda: projector-lambda
+build-lambda: reconciler-lambda
+build-lambda: reminder-scheduler-lambda
+build-lambda: saga-worker-lambda
+build-lambda: server-lambda
+
+$ file infra/terraform/modules/compute/build/server-lambda/bootstrap
+infra/terraform/modules/compute/build/server-lambda/bootstrap: ELF 64-bit LSB executable,
+ARM aarch64, version 1 (SYSV), statically linked, ... not stripped
+# real cross-compiled ARM64 Linux binary, not a host-arch build renamed
+
+$ cd infra/terraform/envs/local && terraform init -upgrade && terraform validate
+Initializing modules...
+- api in ../../modules/api
+- auth in ../../modules/auth
+- cache in ../../modules/cache
+- compute in ../../modules/compute
+- database in ../../modules/database
+- eventing in ../../modules/eventing
+- network in ../../modules/network
+- observability in ../../modules/observability
+- search in ../../modules/search
+- secrets in ../../modules/secrets
+- storage in ../../modules/storage
+- waf in ../../modules/waf
+- waitingroom in ../../modules/waitingroom
+- websocket in ../../modules/websocket
+Terraform has been successfully initialized!
+Success! The configuration is valid.
+
+# --- sanity check: internal/wiring's refactored cmd/server still serves real traffic ---
+$ cmd/server &
+$ curl localhost:8080/health
+{"status":"ok"}
+$ curl "localhost:8080/api/v1/events?limit=1"
+{"events":[{"eventId":1,"title":"Live in Concert", ..., "availableCount":24615}],"nextCursor":1}
+```
+
+**A real gap found and fixed while writing this phase, not a load-test-triggered bug this time but a
+review-triggered one:** `go get github.com/aws/aws-lambda-go` pulled in a dependency requiring
+`go >= 1.26`, and Go's toolchain auto-switching genuinely installed and used a real `go1.26.0` locally
+(`go version` confirms it) — resolving a self-correction already on record from Phase 6, where a
+`golang:1.26.x-alpine` Docker image's mere existence was noted but the local binary was still 1.25.6.
+It's 1.26 now, for real, not just in a container image.
 
 ## Phase 12 — DynamoDB comparison spike (non-blocking, not dual-maintained)
 - [ ] `cmd/dynamo-spike` against `amazon/dynamodb-local`

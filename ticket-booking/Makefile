@@ -36,11 +36,22 @@ sqlc-generate:
 build:
 	go build ./...
 
-# build-lambda: cross-compiled per cmd/*-lambda entrypoint once they exist
-# (Phase 11). Left as a documented no-op target until then so `make
-# tf-validate` has something to depend on without failing.
+# build-lambda: cross-compiles every cmd/*-lambda entrypoint to a
+# provided.al2023/arm64 `bootstrap` binary and zips it into
+# infra/terraform/modules/compute/build/<name>.zip — the exact path
+# modules/compute's aws_lambda_function.fn resources reference via
+# filebase64sha256. Requires `zip` (present by default on macOS/Linux).
+LAMBDA_BUILD_DIR = infra/terraform/modules/compute/build
+LAMBDA_ENTRYPOINTS = $(notdir $(wildcard cmd/*-lambda))
+
 build-lambda:
-	@echo "build-lambda: no lambda entrypoints yet (Phase 11)"
+	@mkdir -p $(LAMBDA_BUILD_DIR)
+	@for name in $(LAMBDA_ENTRYPOINTS); do \
+		echo "build-lambda: $$name"; \
+		mkdir -p $(LAMBDA_BUILD_DIR)/$$name; \
+		GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o $(LAMBDA_BUILD_DIR)/$$name/bootstrap ./cmd/$$name || exit 1; \
+		(cd $(LAMBDA_BUILD_DIR)/$$name && zip -q -X ../$$name.zip bootstrap); \
+	done
 
 tf-validate: build-lambda
 	cd infra/terraform/envs/local && terraform init -upgrade && terraform validate

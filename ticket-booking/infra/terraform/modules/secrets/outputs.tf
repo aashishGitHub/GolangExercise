@@ -19,3 +19,7 @@ output "redis_auth_token" {
   value     = random_password.redis_auth.result
   sensitive = true
 }
+
+output "qr_signing_key_arn" {
+  value = aws_kms_key.qr_signing.arn
+}

@@ -13,3 +13,7 @@ output "cluster_arn" {
 output "cluster_identifier" {
   value = aws_rds_cluster.main.cluster_identifier
 }
+
+output "proxy_name" {
+  value = aws_db_proxy.main.name
+}
