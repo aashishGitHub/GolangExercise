@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"ticketing/internal/auth"
 	"ticketing/internal/db"
@@ -25,6 +26,17 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, la
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	// Not in the original phase list, but required — curl doesn't enforce
+	// CORS, a browser does (mirrors offline-sync-app's own finding, same
+	// fix). CloudFront's native cors_configuration replaces this in prod
+	// (docs/plan.md "CORS" — Phase 11); local dev keeps this chi middleware
+	// since there's no API Gateway locally.
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:5173"},
+		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		AllowCredentials: false,
+	}))
 
 	r.Get("/health", handleHealth)
 

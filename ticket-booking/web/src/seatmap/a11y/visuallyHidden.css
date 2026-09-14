@@ -1,0 +1,15 @@
+/* Clip-path technique — NOT display:none and NOT aria-hidden. The content
+   must stay in the accessibility tree and focusable; it's only invisible
+   on screen (docs/plan.md "The hidden a11y tree, concretely"). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

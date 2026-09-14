@@ -3,9 +3,10 @@ name: ticketing-ci
 # Scoped to ticket-booking/ so this doesn't run for unrelated changes
 # elsewhere in this monorepo. Test + build only — no `terraform apply`, no
 # Lambda/S3/CloudFront deploy step. Mirrors fieldsync-ci.yml's structure.
-# The `web` and lambda-cross-compile jobs are added once those phases land
-# (see ticket-booking/MILESTONES.md) — Phase 0 only has a Go module and a
-# terraform skeleton.
+# The lambda-cross-compile job is added once Phase 11 lands (see
+# ticket-booking/MILESTONES.md). Note: `web`'s vitest suite covers the
+# model/a11y unit tests only — the Playwright E2E suite needs the full
+# docker-compose stack + a seeded venue/event and isn't run in CI yet.
 on:
   push:
     paths: ["ticket-booking/**"]
@@ -27,6 +28,24 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ticket-booking/web/package-lock.json
+      - working-directory: ticket-booking/web
+        run: npm ci
+      - working-directory: ticket-booking/web
+        run: npx tsc -b
+      - working-directory: ticket-booking/web
+        run: npm run build
+      - working-directory: ticket-booking/web
+        run: npx vitest run
 
   terraform-validate:
     runs-on: ubuntu-latest

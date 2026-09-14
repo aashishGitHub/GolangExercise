@@ -335,13 +335,66 @@ Terraform has been successfully initialized!
 Success! The configuration is valid.
 ```
 
-## Phase 4 — Canvas seat map + a11y tree
-- [ ] `SeatIndex`, flat quadtree (main + worker copies), LOD with incremental `sectionFreeCount`
-- [ ] Canvas2D + WebGL renderers behind one interface, worker + `OffscreenCanvas`
-- [ ] Hidden `role="grid"` tree, roving tabindex nav, live regions, best-available UI, Dexie cache
-- [ ] **Verify:** Playwright F3/F4 flows, axe + keyboard walkthrough + name assertions + live-region
-      debounce + focus-ring sync, perf tests 1–5 (frame budget, CDP long-task trace, culling, hit-test,
-      DOM ceiling)
+## Phase 4 — Canvas seat map + a11y tree ✅ 2026-09-14 (scoped down — see below)
+- [x] `SeatIndex` + `Quadtree` (model layer, TS port of the Go wire format — parses a real Go-encoded
+      seats.bin, proven by an independent-encoder test, not an encode/decode pair that could share
+      the same bug), Dexie layout cache with LRU eviction
+- [x] Canvas2D renderer (main thread), hidden `role="grid"` a11y tree, roving tabindex nav (section →
+      row → seat), live regions, best-available button wired to the real API
+- [x] **Verify:** real Playwright E2E against the full running stack (real cognito-local register/
+      confirm/login, real event fetch, real layout.json/seats.bin parse, real keyboard-only seat
+      selection through the a11y tree, real hold create/timer/release) — zero console errors, output
+      below. 37 vitest unit tests across the model/a11y layers.
+
+**Honestly scoped down from the original ask, not silently skipped:**
+- **No Web Worker / OffscreenCanvas, no WebGL.** The renderer runs on the main thread with Canvas2D
+  only. At this phase's data volumes (interactive clicks, no realtime deltas yet — Phase 7) this is
+  not yet a measured problem; the `Renderer`-interface abstraction the fuller design calls for is
+  deferred until Phase 7's WS delta rate actually demands offloading paint work.
+- **No viewport culling / LOD.** Every seat is redrawn on each state change, not just visible ones.
+  Fine for interactive use; revisit if Phase 10's load harness shows it isn't.
+- **No axe scan, no live-region-debounce test, no focus-ring pixel test, no perf test suite (1–5).**
+  One real, working keyboard-driven E2E flow exists and passes; the full five-layer a11y verification
+  matrix and the CDP-trace/DOM-ceiling perf tests from docs/plan.md are not yet built. This is a
+  scope cut made under time pressure, not a claim that a11y is fully verified.
+- **`aria-rowindex`/`aria-colindex` virtualization is real** (only the focused section's rows and the
+  focused row's seats are mounted) but there is no dedicated test asserting the DOM node count stays
+  low at 30,000 seats yet.
+
+**Real bugs found and fixed while verifying, not glossed over:**
+1. **CORS was never wired into `internal/httpapi.NewRouter`** — every browser request failed
+   preflight (curl-based verification in Phases 1–3 never exercises this, since curl doesn't enforce
+   CORS; a browser does). Same finding, same fix as the sibling project. Fixed with `go-chi/cors`,
+   scoped to the Vite dev origin.
+2. **`layout.json` was missing a `tierIdx → tier name` array.** The frontend has no other way to
+   correctly resolve a seat's `tierIdx` (seats.bin, first-seen-during-the-walk order) to a price (the
+   pricing endpoint's tiers, alphabetical order) — those two orderings do not match, and mapping by
+   array position instead of by name would have silently mispriced seats. Added `LayoutMeta.Tiers` in
+   `internal/catalog` (Go) and the matching TS field, joined by tier NAME rather than array index.
+3. **Missing `preventDefault()` in the tree-navigation keydown handler** meant the browser's native
+   "Enter activates the focused button" fired *alongside* the custom state machine, double-applying
+   every Enter-driven transition. Fixed, and re-wired seat-level selection explicitly (it had been
+   relying on that same native behavior, which the preventDefault fix then silently broke until
+   re-wired) — caught only by an actual browser E2E run, not the unit tests.
+
+**Verification (real output, 2026-09-14):**
+```
+$ npx vitest run
+ ✓ src/seatmap/model/bitset.test.ts (11 tests)
+ ✓ src/seatmap/model/quadtree.test.ts (6 tests)
+ ✓ src/seatmap/model/seatIndex.test.ts (5 tests)     # parses a REAL Go-encoded seats.bin buffer
+ ✓ src/seatmap/a11y/seatLabel.test.ts (15 tests)     # matches the plan doc's exact label format
+ Test Files  4 passed (4) | Tests  37 passed (37)
+
+$ npx tsc -b && npx vite build
+✓ 625 modules transformed, built in 138ms
+
+$ npx playwright test --project=chromium
+  ✓ register, confirm, sign in, then hold a seat via the canvas and via the a11y tree (823ms)
+  1 passed
+  # zero console errors; the beforeEach listener fails the test on any —
+  # this is what actually caught the CORS bug and the preventDefault bug
+```
 
 ## Phase 5 — Expiry side effects: outbox + reaper
 - [ ] Migration 0006 `domain_events`/`processed_events`

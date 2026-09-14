@@ -22,6 +22,13 @@ type LayoutMeta struct {
 	BBox          [4]int32      `json:"bbox"` // [minX, minY, maxX, maxY]
 	Sections      []SectionMeta `json:"sections"`
 	Rows          []RowMeta     `json:"rows"`
+	// Tiers[i] is the tier name for seats.bin's tierIdx==i, in the SAME
+	// first-seen-during-the-walk order EncodeSeatsBin's tierIdx uses. A
+	// consumer must use THIS array to resolve tierIdx -> price (via the
+	// pricing endpoint's tiers, keyed by name) — GET .../pricing's own
+	// tier order (alphabetical) does NOT match tierIdx order, and nothing
+	// else in this payload carries that mapping.
+	Tiers []string `json:"tiers"`
 }
 
 type SectionMeta struct {
@@ -179,6 +186,10 @@ func BuildLayout(venueID int64, layoutVersion int, rows []db.ListVenueSeatsOrder
 
 	meta.SeatCount = len(rows)
 	meta.BBox = [4]int32{minX, minY, maxX, maxY}
+	meta.Tiers = make([]string, len(tierOrder))
+	for tier, idx := range tierOrder {
+		meta.Tiers[idx] = tier
+	}
 
 	return Built{
 		Meta:          meta,
