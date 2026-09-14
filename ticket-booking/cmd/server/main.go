@@ -17,6 +17,8 @@ import (
 	"ticketing/internal/holdlock"
 	"ticketing/internal/httpapi"
 	"ticketing/internal/inventory"
+	"ticketing/internal/order"
+	"ticketing/internal/payment"
 	"ticketing/internal/storage"
 )
 
@@ -40,8 +42,12 @@ func main() {
 	defer lock.Close()
 	inv := inventory.New(pool, q, lock, time.Duration(cfg.HoldTTLSeconds)*time.Second, cfg.MaxSeatsPerHold)
 
+	pay := payment.NewFakeProvider()
+	pay.FailRate, pay.TimeoutRate, pay.AmbiguousRate = cfg.PaymentFailRate, cfg.PaymentTimeoutRate, cfg.PaymentAmbiguousRate
+	orders := order.New(pool, q, inv, pay)
+
 	verifier := auth.NewVerifier(cfg.CognitoIssuerURL(), cfg.CognitoAudience)
-	r := httpapi.NewRouter(verifier, q, inv, cfg.S3LayoutsBucket, s3.PublicURL)
+	r := httpapi.NewRouter(verifier, q, inv, orders, cfg.S3LayoutsBucket, s3.PublicURL)
 
 	log.Printf("ticketing server listening on %s (env=%s)", cfg.Addr, cfg.Env)
 	if err := http.ListenAndServe(cfg.Addr, r); err != nil {

@@ -208,6 +208,65 @@ func (q *Queries) CreateEventPriceTier(ctx context.Context, arg CreateEventPrice
 	return err
 }
 
+const createOrder = `-- name: CreateOrder :one
+
+INSERT INTO orders (order_id, user_sub, event_id, hold_id, seat_ids, amount_cents)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING order_id, user_sub, event_id, hold_id, seat_ids, amount_cents, currency, status, reallocated, failure_code, failure_detail, created_at, updated_at
+`
+
+type CreateOrderParams struct {
+	OrderID     uuid.UUID `json:"orderId"`
+	UserSub     string    `json:"userSub"`
+	EventID     int64     `json:"eventId"`
+	HoldID      uuid.UUID `json:"holdId"`
+	SeatIds     []int64   `json:"seatIds"`
+	AmountCents int32     `json:"amountCents"`
+}
+
+// Phase 6: the payment saga (docs/plan.md "The saga").
+func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error) {
+	row := q.db.QueryRow(ctx, createOrder,
+		arg.OrderID,
+		arg.UserSub,
+		arg.EventID,
+		arg.HoldID,
+		arg.SeatIds,
+		arg.AmountCents,
+	)
+	var i Order
+	err := row.Scan(
+		&i.OrderID,
+		&i.UserSub,
+		&i.EventID,
+		&i.HoldID,
+		&i.SeatIds,
+		&i.AmountCents,
+		&i.Currency,
+		&i.Status,
+		&i.Reallocated,
+		&i.FailureCode,
+		&i.FailureDetail,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createSagaStep = `-- name: CreateSagaStep :exec
+INSERT INTO order_saga_steps (order_id, step) VALUES ($1, $2)
+`
+
+type CreateSagaStepParams struct {
+	OrderID uuid.UUID `json:"orderId"`
+	Step    string    `json:"step"`
+}
+
+func (q *Queries) CreateSagaStep(ctx context.Context, arg CreateSagaStepParams) error {
+	_, err := q.db.Exec(ctx, createSagaStep, arg.OrderID, arg.Step)
+	return err
+}
+
 const createSeat = `-- name: CreateSeat :one
 INSERT INTO seats (row_id, seat_label, x_coord, y_coord)
 VALUES ($1, $2, $3, $4)
@@ -355,6 +414,80 @@ func (q *Queries) ExtendHold(ctx context.Context, arg ExtendHoldParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const failOrder = `-- name: FailOrder :exec
+UPDATE orders SET status = 'FAILED', failure_code = $1,
+                   failure_detail = $2, updated_at = now()
+WHERE order_id = $3
+`
+
+type FailOrderParams struct {
+	FailureCode   pgtype.Text `json:"failureCode"`
+	FailureDetail pgtype.Text `json:"failureDetail"`
+	OrderID       uuid.UUID   `json:"orderId"`
+}
+
+func (q *Queries) FailOrder(ctx context.Context, arg FailOrderParams) error {
+	_, err := q.db.Exec(ctx, failOrder, arg.FailureCode, arg.FailureDetail, arg.OrderID)
+	return err
+}
+
+const findCapturedPaymentsMissingOrderOrRefund = `-- name: FindCapturedPaymentsMissingOrderOrRefund :many
+SELECT p.payment_id FROM payments p
+WHERE p.status = 'CAPTURED'
+  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.order_id = p.order_id AND o.status IN ('CONFIRMED', 'TICKETED'))
+  AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.payment_id = p.payment_id AND r.status = 'COMPLETED')
+`
+
+// The money invariant, half 2: a CAPTURED payment with no confirmed order
+// and no completed refund — must always be 0 rows.
+func (q *Queries) FindCapturedPaymentsMissingOrderOrRefund(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, findCapturedPaymentsMissingOrderOrRefund)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var payment_id uuid.UUID
+		if err := rows.Scan(&payment_id); err != nil {
+			return nil, err
+		}
+		items = append(items, payment_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findOrdersMissingPayment = `-- name: FindOrdersMissingPayment :many
+SELECT o.order_id FROM orders o
+LEFT JOIN payments p ON p.order_id = o.order_id AND p.status = 'CAPTURED'
+WHERE o.status IN ('CONFIRMED', 'TICKETED') AND p.payment_id IS NULL
+`
+
+// The money invariant, half 1: a CONFIRMED/TICKETED order with no
+// CAPTURED payment — must always be 0 rows.
+func (q *Queries) FindOrdersMissingPayment(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, findOrdersMissingPayment)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var order_id uuid.UUID
+		if err := rows.Scan(&order_id); err != nil {
+			return nil, err
+		}
+		items = append(items, order_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getEvent = `-- name: GetEvent :one
 SELECT event_id, venue_id, artist, title, starts_at, onsale_at, home_region, status, layout_version, created_at FROM events WHERE event_id = $1
 `
@@ -373,6 +506,101 @@ func (q *Queries) GetEvent(ctx context.Context, eventID int64) (Event, error) {
 		&i.Status,
 		&i.LayoutVersion,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getOrder = `-- name: GetOrder :one
+SELECT order_id, user_sub, event_id, hold_id, seat_ids, amount_cents, currency, status, reallocated, failure_code, failure_detail, created_at, updated_at FROM orders WHERE order_id = $1
+`
+
+func (q *Queries) GetOrder(ctx context.Context, orderID uuid.UUID) (Order, error) {
+	row := q.db.QueryRow(ctx, getOrder, orderID)
+	var i Order
+	err := row.Scan(
+		&i.OrderID,
+		&i.UserSub,
+		&i.EventID,
+		&i.HoldID,
+		&i.SeatIds,
+		&i.AmountCents,
+		&i.Currency,
+		&i.Status,
+		&i.Reallocated,
+		&i.FailureCode,
+		&i.FailureDetail,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getOrderByHoldID = `-- name: GetOrderByHoldID :one
+SELECT order_id, user_sub, event_id, hold_id, seat_ids, amount_cents, currency, status, reallocated, failure_code, failure_detail, created_at, updated_at FROM orders WHERE hold_id = $1
+`
+
+func (q *Queries) GetOrderByHoldID(ctx context.Context, holdID uuid.UUID) (Order, error) {
+	row := q.db.QueryRow(ctx, getOrderByHoldID, holdID)
+	var i Order
+	err := row.Scan(
+		&i.OrderID,
+		&i.UserSub,
+		&i.EventID,
+		&i.HoldID,
+		&i.SeatIds,
+		&i.AmountCents,
+		&i.Currency,
+		&i.Status,
+		&i.Reallocated,
+		&i.FailureCode,
+		&i.FailureDetail,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPaymentByIdempotencyKey = `-- name: GetPaymentByIdempotencyKey :one
+SELECT payment_id, order_id, idempotency_key, provider_ref, amount_cents, status, attempts, last_error, created_at, updated_at FROM payments WHERE idempotency_key = $1
+`
+
+func (q *Queries) GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (Payment, error) {
+	row := q.db.QueryRow(ctx, getPaymentByIdempotencyKey, idempotencyKey)
+	var i Payment
+	err := row.Scan(
+		&i.PaymentID,
+		&i.OrderID,
+		&i.IdempotencyKey,
+		&i.ProviderRef,
+		&i.AmountCents,
+		&i.Status,
+		&i.Attempts,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSagaStep = `-- name: GetSagaStep :one
+SELECT order_id, step, state, attempts, last_error, updated_at FROM order_saga_steps WHERE order_id = $1 AND step = $2
+`
+
+type GetSagaStepParams struct {
+	OrderID uuid.UUID `json:"orderId"`
+	Step    string    `json:"step"`
+}
+
+func (q *Queries) GetSagaStep(ctx context.Context, arg GetSagaStepParams) (OrderSagaStep, error) {
+	row := q.db.QueryRow(ctx, getSagaStep, arg.OrderID, arg.Step)
+	var i OrderSagaStep
+	err := row.Scan(
+		&i.OrderID,
+		&i.Step,
+		&i.State,
+		&i.Attempts,
+		&i.LastError,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -536,6 +764,77 @@ func (q *Queries) InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditPara
 		arg.LatencyMs,
 	)
 	return err
+}
+
+const insertPayment = `-- name: InsertPayment :one
+INSERT INTO payments (payment_id, order_id, idempotency_key, amount_cents, status)
+VALUES ($1, $2, $3, $4, 'PENDING')
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING payment_id, order_id, idempotency_key, provider_ref, amount_cents, status, attempts, last_error, created_at, updated_at
+`
+
+type InsertPaymentParams struct {
+	PaymentID      uuid.UUID `json:"paymentId"`
+	OrderID        uuid.UUID `json:"orderId"`
+	IdempotencyKey string    `json:"idempotencyKey"`
+	AmountCents    int32     `json:"amountCents"`
+}
+
+func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, insertPayment,
+		arg.PaymentID,
+		arg.OrderID,
+		arg.IdempotencyKey,
+		arg.AmountCents,
+	)
+	var i Payment
+	err := row.Scan(
+		&i.PaymentID,
+		&i.OrderID,
+		&i.IdempotencyKey,
+		&i.ProviderRef,
+		&i.AmountCents,
+		&i.Status,
+		&i.Attempts,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertRefund = `-- name: InsertRefund :one
+INSERT INTO refunds (refund_id, payment_id, provider_ref, amount_cents, status)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING refund_id, payment_id, provider_ref, amount_cents, status, created_at
+`
+
+type InsertRefundParams struct {
+	RefundID    uuid.UUID   `json:"refundId"`
+	PaymentID   uuid.UUID   `json:"paymentId"`
+	ProviderRef pgtype.Text `json:"providerRef"`
+	AmountCents int32       `json:"amountCents"`
+	Status      string      `json:"status"`
+}
+
+func (q *Queries) InsertRefund(ctx context.Context, arg InsertRefundParams) (Refund, error) {
+	row := q.db.QueryRow(ctx, insertRefund,
+		arg.RefundID,
+		arg.PaymentID,
+		arg.ProviderRef,
+		arg.AmountCents,
+		arg.Status,
+	)
+	var i Refund
+	err := row.Scan(
+		&i.RefundID,
+		&i.PaymentID,
+		&i.ProviderRef,
+		&i.AmountCents,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const listAvailableForBestAvailable = `-- name: ListAvailableForBestAvailable :many
@@ -788,6 +1087,81 @@ func (q *Queries) ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHold
 	return items, nil
 }
 
+const listStuckOrders = `-- name: ListStuckOrders :many
+SELECT order_id FROM orders
+WHERE status IN ('PENDING', 'AUTHORIZING', 'CONFIRMING') AND updated_at < now() - make_interval(secs => $1::int)
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListStuckOrdersParams struct {
+	StuckAfterSeconds int32 `json:"stuckAfterSeconds"`
+	RowLimit          int32 `json:"rowLimit"`
+}
+
+func (q *Queries) ListStuckOrders(ctx context.Context, arg ListStuckOrdersParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listStuckOrders, arg.StuckAfterSeconds, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var order_id uuid.UUID
+		if err := rows.Scan(&order_id); err != nil {
+			return nil, err
+		}
+		items = append(items, order_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStuckPayments = `-- name: ListStuckPayments :many
+SELECT payment_id, order_id, idempotency_key, provider_ref, amount_cents, status, attempts, last_error, created_at, updated_at FROM payments
+WHERE status IN ('PENDING', 'UNKNOWN') AND created_at < now() - make_interval(secs => $1::int)
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListStuckPaymentsParams struct {
+	StuckAfterSeconds int32 `json:"stuckAfterSeconds"`
+	RowLimit          int32 `json:"rowLimit"`
+}
+
+func (q *Queries) ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error) {
+	rows, err := q.db.Query(ctx, listStuckPayments, arg.StuckAfterSeconds, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Payment
+	for rows.Next() {
+		var i Payment
+		if err := rows.Scan(
+			&i.PaymentID,
+			&i.OrderID,
+			&i.IdempotencyKey,
+			&i.ProviderRef,
+			&i.AmountCents,
+			&i.Status,
+			&i.Attempts,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnpublishedDomainEvents = `-- name: ListUnpublishedDomainEvents :many
 SELECT event_id, aggregate_id, event_type, schema_version, payload
 FROM domain_events
@@ -916,6 +1290,23 @@ func (q *Queries) MinEventPriceCents(ctx context.Context, eventID int64) (int32,
 	return column_1, err
 }
 
+const reallocateOrder = `-- name: ReallocateOrder :exec
+UPDATE orders SET hold_id = $1, seat_ids = $2,
+                   reallocated = true, updated_at = now()
+WHERE order_id = $3
+`
+
+type ReallocateOrderParams struct {
+	HoldID  uuid.UUID `json:"holdId"`
+	SeatIds []int64   `json:"seatIds"`
+	OrderID uuid.UUID `json:"orderId"`
+}
+
+func (q *Queries) ReallocateOrder(ctx context.Context, arg ReallocateOrderParams) error {
+	_, err := q.db.Exec(ctx, reallocateOrder, arg.HoldID, arg.SeatIds, arg.OrderID)
+	return err
+}
+
 const releaseHold = `-- name: ReleaseHold :execrows
 UPDATE event_seats
    SET status = 0, hold_id = NULL, held_by = NULL, hold_expires_at = NULL, hold_price_cents = NULL,
@@ -946,5 +1337,65 @@ UPDATE events SET status = 'ON_SALE' WHERE event_id = $1
 
 func (q *Queries) SetEventOnSale(ctx context.Context, eventID int64) error {
 	_, err := q.db.Exec(ctx, setEventOnSale, eventID)
+	return err
+}
+
+const updateOrderStatus = `-- name: UpdateOrderStatus :exec
+UPDATE orders SET status = $1, updated_at = now() WHERE order_id = $2
+`
+
+type UpdateOrderStatusParams struct {
+	Status  string    `json:"status"`
+	OrderID uuid.UUID `json:"orderId"`
+}
+
+func (q *Queries) UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) error {
+	_, err := q.db.Exec(ctx, updateOrderStatus, arg.Status, arg.OrderID)
+	return err
+}
+
+const updatePaymentStatus = `-- name: UpdatePaymentStatus :exec
+UPDATE payments SET status = $1, provider_ref = $2,
+                     last_error = $3, attempts = attempts + 1, updated_at = now()
+WHERE payment_id = $4
+`
+
+type UpdatePaymentStatusParams struct {
+	Status      string      `json:"status"`
+	ProviderRef pgtype.Text `json:"providerRef"`
+	LastError   pgtype.Text `json:"lastError"`
+	PaymentID   uuid.UUID   `json:"paymentId"`
+}
+
+func (q *Queries) UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) error {
+	_, err := q.db.Exec(ctx, updatePaymentStatus,
+		arg.Status,
+		arg.ProviderRef,
+		arg.LastError,
+		arg.PaymentID,
+	)
+	return err
+}
+
+const updateSagaStep = `-- name: UpdateSagaStep :exec
+UPDATE order_saga_steps SET state = $1, last_error = $2,
+                             attempts = attempts + 1, updated_at = now()
+WHERE order_id = $3 AND step = $4
+`
+
+type UpdateSagaStepParams struct {
+	State     string      `json:"state"`
+	LastError pgtype.Text `json:"lastError"`
+	OrderID   uuid.UUID   `json:"orderId"`
+	Step      string      `json:"step"`
+}
+
+func (q *Queries) UpdateSagaStep(ctx context.Context, arg UpdateSagaStepParams) error {
+	_, err := q.db.Exec(ctx, updateSagaStep,
+		arg.State,
+		arg.LastError,
+		arg.OrderID,
+		arg.Step,
+	)
 	return err
 }

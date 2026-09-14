@@ -39,6 +39,13 @@ type Config struct {
 	HoldTTLSeconds    int    // HOLD_TTL_SECONDS
 	MaxSeatsPerHold   int    // MAX_SEATS_PER_HOLD
 	WaitingRoomSecret string // WAITING_ROOM_SECRET — HMAC key for admission tokens
+
+	// Fake payment provider pathology injection (internal/payment) — all
+	// default to 0 so ordinary dev stays clean; the load harness (Phase 10)
+	// and reconciler verification turn these on.
+	PaymentFailRate      float64 // PAYMENT_FAIL_RATE
+	PaymentTimeoutRate   float64 // PAYMENT_TIMEOUT_RATE
+	PaymentAmbiguousRate float64 // PAYMENT_AMBIGUOUS_RATE
 }
 
 func Load() Config {
@@ -69,6 +76,10 @@ func Load() Config {
 		HoldTTLSeconds:    atoiOr(getenv("HOLD_TTL_SECONDS", "600"), 600),
 		MaxSeatsPerHold:   atoiOr(getenv("MAX_SEATS_PER_HOLD", "8"), 8),
 		WaitingRoomSecret: getenv("WAITING_ROOM_SECRET", "local-dev-only-insecure-secret"),
+
+		PaymentFailRate:      atofOr(getenv("PAYMENT_FAIL_RATE", "0"), 0),
+		PaymentTimeoutRate:   atofOr(getenv("PAYMENT_TIMEOUT_RATE", "0"), 0),
+		PaymentAmbiguousRate: atofOr(getenv("PAYMENT_AMBIGUOUS_RATE", "0"), 0),
 	}
 }
 
@@ -95,4 +106,12 @@ func atoiOr(s string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func atofOr(s string, fallback float64) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }

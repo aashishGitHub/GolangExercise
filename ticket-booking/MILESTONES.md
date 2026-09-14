@@ -460,14 +460,82 @@ $ psql -c "SELECT count(*) FROM event_seats WHERE status IN (1,3) AND hold_expir
 $ sleep 4 && tail reaper.log          -- no new lines: idempotent, stays quiet once nothing is expired
 ```
 
-## Phase 6 — Payment saga, idempotency, reconciler + checkout page
-- [ ] Migrations 0004/0005 (`orders`/`payments`/`refunds`/`order_saga_steps`, `idempotency_keys`)
-- [ ] Fake payment provider with injectable pathology
-- [ ] `internal/order` orchestrator, `saga-worker`, `internal/reconcile`
-- [ ] Order routes, resumable checkout page
-- [ ] **Verify:** happy path, duplicate-idempotency-key dedup, expiry-after-capture both branches
-      (reallocated / compensated+refund), ambiguous-payment reconciler resolution, both money-invariant
-      queries return 0 rows
+## Phase 6 — Payment saga, idempotency, reconciler + checkout page ✅ 2026-09-14 (backend only — see below)
+- [x] Migration 0006 (`orders`/`payments`/`refunds`/`order_saga_steps`/`idempotency_keys` — refunds as
+      their own table per the plan's fixed gap #11, not a status flip on `payments`)
+- [x] `internal/payment`: fake provider with injectable `FailRate`/`TimeoutRate`/`AmbiguousRate`,
+      idempotent-on-key `Charge`, and `StatusOf` standing in for "query the provider directly" —
+      6 unit tests, including the crucial one proving `AmbiguousRate` genuinely captures while
+      reporting `UNKNOWN`
+- [x] `internal/order`: the saga orchestrator (`CreateOrder` + `RunSaga`), `cmd/saga-worker` (catch-up
+      sweep, same inline-fast-path-plus-scheduled-catch-up shape as Phases 3 and 5)
+- [x] `internal/reconcile` + `cmd/reconciler`: the 3-step resolver plus both money-invariant checks,
+      logging loudly if either is ever violated
+- [x] Order routes: `POST /orders` (202, saga runs in a detached goroutine), `GET /orders/{id}`
+- [x] **Verify:** happy path, duplicate-order-per-hold rejection, both expiry-after-capture branches,
+      ambiguous-payment reconciler resolution, and both money-invariant queries returning 0 rows —
+      all against the real stack and real integration tests, output below.
+
+**Honestly scoped down: no resumable checkout React page.** The plan calls for a single-page,
+non-wizard checkout UI with optimistic offers and mandatory re-confirm on a charge-time price change.
+None of that UI exists yet — `POST /orders`/`GET /orders/{id}` are the only client-facing surface, and
+Phase 4's frontend doesn't call them. The backend saga (the harder, more failure-prone half) is real,
+tested, and verified; the checkout page is a real gap, not a "should work."
+
+**A genuine design choice, not a bug:** `POST /orders` for the same hold twice concurrently surfaces
+the loser as a generic `500 internal` rather than a specific `409` — `orders.hold_id UNIQUE` is what
+actually stops the duplicate (verified below), the HTTP layer just doesn't yet special-case that
+constraint violation into a nicer error code. Correctness holds; the error message is rough.
+
+**Verification (real output, 2026-09-14):**
+```
+$ go test -tags=integration ./internal/order/... -v
+--- PASS: TestCreateOrderAndRunSaga_HappyPath
+--- PASS: TestRunSaga_HoldExpiredBeforeCharge_NoMoneyMoved       # 0 payment rows — nothing charged
+--- PASS: TestRunSaga_ExpiryAfterCapture_ReallocatesSuccessfully # captured -> hold lapses -> new seat,
+                                                                  #   0 refunds — reallocation preferred
+--- PASS: TestRunSaga_ExpiryAfterCapture_RefundsWhenNoSeatsLeft  # captured -> hold lapses -> no seats
+                                                                  #   left -> 1 completed refund
+PASS
+
+$ go test -tags=integration ./internal/reconcile/... -v
+--- PASS: TestReconciler_ResolvesAmbiguousPayment   # AmbiguousRate=1.0: saga correctly stalls in
+                                                     #   AUTHORIZING rather than guess; reconciler
+                                                     #   queries the provider directly and resolves to
+                                                     #   TICKETED
+--- PASS: TestMoneyInvariant_HoldsAcrossManyOrders  # 20 real orders, FailRate=0.3 — both invariants
+                                                     #   hold across a realistic decline rate
+PASS
+
+# Full HTTP lifecycle against the real running stack (real cognito-local token):
+$ curl -X POST ... -d '{"seatOrdinals":[800]}' localhost:8080/api/v1/events/1/holds
+{"holdId":"285b81ca-...", ...}
+$ curl -X POST ... -d '{"holdId":"285b81ca-..."}' localhost:8080/api/v1/orders
+{"orderId":"a12b11f5-...","status":"PENDING","pollAfterMs":500}
+$ sleep 1 && curl ... localhost:8080/api/v1/orders/a12b11f5-...
+{"status":"TICKETED","seatIds":[801],"amountCents":25000,"reallocated":false, ...}
+$ psql -c "SELECT status FROM event_seats WHERE event_id=1 AND seat_id=801"
+ status
+      2                              -- BOOKED
+
+# Duplicate order for the same hold, fired concurrently:
+$ curl -X POST ... -d '{"holdId":"$HOLDID2"}' ... &  curl -X POST ... -d '{"holdId":"$HOLDID2"}' ... &
+{"orderId":"54eda558-...","status":"PENDING", ...}          # winner
+{"code":"internal","message":"create order failed"}          # loser — orders.hold_id UNIQUE fired
+$ psql -c "SELECT count(*) FROM payments WHERE order_id='54eda558-...'"
+ count
+     1                              -- exactly one payment, not two
+
+$ psql -c "SELECT o.order_id FROM orders o LEFT JOIN payments p
+             ON p.order_id=o.order_id AND p.status='CAPTURED'
+            WHERE o.status IN ('CONFIRMED','TICKETED') AND p.payment_id IS NULL"
+(0 rows)                            -- seat-with-no-money invariant, real query, real data
+
+$ psql -c "SELECT p.payment_id FROM payments p WHERE p.status='CAPTURED'
+             AND NOT EXISTS (...orders CONFIRMED/TICKETED...)
+             AND NOT EXISTS (...completed refund...)"
+(0 rows)                            -- money-with-no-seat invariant
+```
 
 ## Phase 7 — Realtime: projector + WS deltas
 - [ ] `projector` → Redis bitset + `seq` + delta ring

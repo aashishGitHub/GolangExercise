@@ -68,10 +68,68 @@ type HoldsAudit struct {
 	CreatedAt  pgtype.Timestamptz `json:"createdAt"`
 }
 
+type IdempotencyKey struct {
+	Key            string             `json:"key"`
+	UserSub        string             `json:"userSub"`
+	Route          string             `json:"route"`
+	RequestHash    string             `json:"requestHash"`
+	ResponseStatus pgtype.Int4        `json:"responseStatus"`
+	ResponseBody   []byte             `json:"responseBody"`
+	CreatedAt      pgtype.Timestamptz `json:"createdAt"`
+	CompletedAt    pgtype.Timestamptz `json:"completedAt"`
+}
+
+type Order struct {
+	OrderID       uuid.UUID          `json:"orderId"`
+	UserSub       string             `json:"userSub"`
+	EventID       int64              `json:"eventId"`
+	HoldID        uuid.UUID          `json:"holdId"`
+	SeatIds       []int64            `json:"seatIds"`
+	AmountCents   int32              `json:"amountCents"`
+	Currency      string             `json:"currency"`
+	Status        string             `json:"status"`
+	Reallocated   bool               `json:"reallocated"`
+	FailureCode   pgtype.Text        `json:"failureCode"`
+	FailureDetail pgtype.Text        `json:"failureDetail"`
+	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt     pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type OrderSagaStep struct {
+	OrderID   uuid.UUID          `json:"orderId"`
+	Step      string             `json:"step"`
+	State     string             `json:"state"`
+	Attempts  int32              `json:"attempts"`
+	LastError pgtype.Text        `json:"lastError"`
+	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type Payment struct {
+	PaymentID      uuid.UUID          `json:"paymentId"`
+	OrderID        uuid.UUID          `json:"orderId"`
+	IdempotencyKey string             `json:"idempotencyKey"`
+	ProviderRef    pgtype.Text        `json:"providerRef"`
+	AmountCents    int32              `json:"amountCents"`
+	Status         string             `json:"status"`
+	Attempts       int32              `json:"attempts"`
+	LastError      pgtype.Text        `json:"lastError"`
+	CreatedAt      pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt      pgtype.Timestamptz `json:"updatedAt"`
+}
+
 type ProcessedEvent struct {
 	EventID      uuid.UUID          `json:"eventId"`
 	ConsumerName string             `json:"consumerName"`
 	ProcessedAt  pgtype.Timestamptz `json:"processedAt"`
+}
+
+type Refund struct {
+	RefundID    uuid.UUID          `json:"refundId"`
+	PaymentID   uuid.UUID          `json:"paymentId"`
+	ProviderRef pgtype.Text        `json:"providerRef"`
+	AmountCents int32              `json:"amountCents"`
+	Status      string             `json:"status"`
+	CreatedAt   pgtype.Timestamptz `json:"createdAt"`
 }
 
 type Seat struct {

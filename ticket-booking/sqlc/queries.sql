@@ -185,6 +185,89 @@ FROM event_seats
 WHERE hold_id = sqlc.arg(hold_id)
 ORDER BY seat_id;
 
+-- Phase 6: the payment saga (docs/plan.md "The saga").
+
+-- name: CreateOrder :one
+INSERT INTO orders (order_id, user_sub, event_id, hold_id, seat_ids, amount_cents)
+VALUES (sqlc.arg(order_id), sqlc.arg(user_sub), sqlc.arg(event_id), sqlc.arg(hold_id), sqlc.arg(seat_ids), sqlc.arg(amount_cents))
+RETURNING *;
+
+-- name: GetOrder :one
+SELECT * FROM orders WHERE order_id = sqlc.arg(order_id);
+
+-- name: GetOrderByHoldID :one
+SELECT * FROM orders WHERE hold_id = sqlc.arg(hold_id);
+
+-- name: UpdateOrderStatus :exec
+UPDATE orders SET status = sqlc.arg(status), updated_at = now() WHERE order_id = sqlc.arg(order_id);
+
+-- name: FailOrder :exec
+UPDATE orders SET status = 'FAILED', failure_code = sqlc.arg(failure_code),
+                   failure_detail = sqlc.arg(failure_detail), updated_at = now()
+WHERE order_id = sqlc.arg(order_id);
+
+-- name: ReallocateOrder :exec
+UPDATE orders SET hold_id = sqlc.arg(hold_id), seat_ids = sqlc.arg(seat_ids),
+                   reallocated = true, updated_at = now()
+WHERE order_id = sqlc.arg(order_id);
+
+-- name: CreateSagaStep :exec
+INSERT INTO order_saga_steps (order_id, step) VALUES (sqlc.arg(order_id), sqlc.arg(step));
+
+-- name: UpdateSagaStep :exec
+UPDATE order_saga_steps SET state = sqlc.arg(state), last_error = sqlc.arg(last_error),
+                             attempts = attempts + 1, updated_at = now()
+WHERE order_id = sqlc.arg(order_id) AND step = sqlc.arg(step);
+
+-- name: GetSagaStep :one
+SELECT * FROM order_saga_steps WHERE order_id = sqlc.arg(order_id) AND step = sqlc.arg(step);
+
+-- name: ListStuckOrders :many
+SELECT order_id FROM orders
+WHERE status IN ('PENDING', 'AUTHORIZING', 'CONFIRMING') AND updated_at < now() - make_interval(secs => sqlc.arg(stuck_after_seconds)::int)
+ORDER BY created_at
+LIMIT sqlc.arg(row_limit);
+
+-- name: InsertPayment :one
+INSERT INTO payments (payment_id, order_id, idempotency_key, amount_cents, status)
+VALUES (sqlc.arg(payment_id), sqlc.arg(order_id), sqlc.arg(idempotency_key), sqlc.arg(amount_cents), 'PENDING')
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING *;
+
+-- name: GetPaymentByIdempotencyKey :one
+SELECT * FROM payments WHERE idempotency_key = sqlc.arg(idempotency_key);
+
+-- name: UpdatePaymentStatus :exec
+UPDATE payments SET status = sqlc.arg(status), provider_ref = sqlc.arg(provider_ref),
+                     last_error = sqlc.arg(last_error), attempts = attempts + 1, updated_at = now()
+WHERE payment_id = sqlc.arg(payment_id);
+
+-- name: ListStuckPayments :many
+SELECT * FROM payments
+WHERE status IN ('PENDING', 'UNKNOWN') AND created_at < now() - make_interval(secs => sqlc.arg(stuck_after_seconds)::int)
+ORDER BY created_at
+LIMIT sqlc.arg(row_limit);
+
+-- name: InsertRefund :one
+INSERT INTO refunds (refund_id, payment_id, provider_ref, amount_cents, status)
+VALUES (sqlc.arg(refund_id), sqlc.arg(payment_id), sqlc.arg(provider_ref), sqlc.arg(amount_cents), sqlc.arg(status))
+RETURNING *;
+
+-- The money invariant, half 1: a CONFIRMED/TICKETED order with no
+-- CAPTURED payment — must always be 0 rows.
+-- name: FindOrdersMissingPayment :many
+SELECT o.order_id FROM orders o
+LEFT JOIN payments p ON p.order_id = o.order_id AND p.status = 'CAPTURED'
+WHERE o.status IN ('CONFIRMED', 'TICKETED') AND p.payment_id IS NULL;
+
+-- The money invariant, half 2: a CAPTURED payment with no confirmed order
+-- and no completed refund — must always be 0 rows.
+-- name: FindCapturedPaymentsMissingOrderOrRefund :many
+SELECT p.payment_id FROM payments p
+WHERE p.status = 'CAPTURED'
+  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.order_id = p.order_id AND o.status IN ('CONFIRMED', 'TICKETED'))
+  AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.payment_id = p.payment_id AND r.status = 'COMPLETED');
+
 -- name: InsertDomainEvent :exec
 INSERT INTO domain_events (event_id, aggregate_id, event_type, schema_version, payload)
 VALUES (sqlc.arg(event_id), sqlc.arg(aggregate_id), sqlc.arg(event_type), sqlc.arg(schema_version), sqlc.arg(payload));

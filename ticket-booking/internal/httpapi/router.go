@@ -14,6 +14,7 @@ import (
 	"ticketing/internal/auth"
 	"ticketing/internal/db"
 	"ticketing/internal/inventory"
+	"ticketing/internal/order"
 )
 
 // NewRouter builds the full route tree. /health and the catalog/
@@ -21,7 +22,7 @@ import (
 // (whoami, holds) are wrapped by the auth verifier — "auth gates the API,
 // not browsing the static seat map assets", mirroring the sibling's "auth
 // gates sync, not capture" split.
-func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
+func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -42,6 +43,7 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, la
 
 	cat := &catalogAPI{q: q, layoutsBucket: layoutsBucket, publicURL: publicURL}
 	holds := &holdsAPI{inv: inv, q: q}
+	ord := &ordersAPI{orders: orders, q: q}
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/events", cat.listEvents)
@@ -58,6 +60,9 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, la
 			authed.Get("/holds/{holdID}", holds.getHold)
 			authed.Delete("/holds/{holdID}", holds.deleteHold)
 			authed.Post("/holds/{holdID}/extend", holds.extendHold)
+
+			authed.Post("/orders", ord.createOrder)
+			authed.Get("/orders/{orderID}", ord.getOrder)
 		})
 	})
 

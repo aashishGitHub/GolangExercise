@@ -35,6 +35,9 @@ type Querier interface {
 	CountEventSeats(ctx context.Context, eventID int64) (int64, error)
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
 	CreateEventPriceTier(ctx context.Context, arg CreateEventPriceTierParams) error
+	// Phase 6: the payment saga (docs/plan.md "The saga").
+	CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error)
+	CreateSagaStep(ctx context.Context, arg CreateSagaStepParams) error
 	CreateSeat(ctx context.Context, arg CreateSeatParams) (Seat, error)
 	CreateSeatRow(ctx context.Context, arg CreateSeatRowParams) (SeatRow, error)
 	CreateSection(ctx context.Context, arg CreateSectionParams) (Section, error)
@@ -45,7 +48,18 @@ type Querier interface {
 	// ExtendHold: called at payment initiation. rowcount < len(seats) means the
 	// hold already lapsed — the saga must abort BEFORE charging.
 	ExtendHold(ctx context.Context, arg ExtendHoldParams) (int64, error)
+	FailOrder(ctx context.Context, arg FailOrderParams) error
+	// The money invariant, half 2: a CAPTURED payment with no confirmed order
+	// and no completed refund — must always be 0 rows.
+	FindCapturedPaymentsMissingOrderOrRefund(ctx context.Context) ([]uuid.UUID, error)
+	// The money invariant, half 1: a CONFIRMED/TICKETED order with no
+	// CAPTURED payment — must always be 0 rows.
+	FindOrdersMissingPayment(ctx context.Context) ([]uuid.UUID, error)
 	GetEvent(ctx context.Context, eventID int64) (Event, error)
+	GetOrder(ctx context.Context, orderID uuid.UUID) (Order, error)
+	GetOrderByHoldID(ctx context.Context, holdID uuid.UUID) (Order, error)
+	GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (Payment, error)
+	GetSagaStep(ctx context.Context, arg GetSagaStepParams) (OrderSagaStep, error)
 	// Phase 3: the correctness core (docs/plan.md "The correctness core").
 	// Callers MUST pre-sort seat_ids ascending (and fences alongside them for
 	// ConfirmSeats) — that ordering is what makes deadlock between two
@@ -59,6 +73,8 @@ type Querier interface {
 	GetVenue(ctx context.Context, venueID int64) (Venue, error)
 	InsertDomainEvent(ctx context.Context, arg InsertDomainEventParams) error
 	InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditParams) error
+	InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error)
+	InsertRefund(ctx context.Context, arg InsertRefundParams) (Refund, error)
 	// ListAvailableForBestAvailable: candidate seats for the contiguous-run
 	// scan (internal/inventory.BestAvailable) — row_id is included because
 	// ordinals are contiguous ACROSS a whole section, not just within one row
@@ -83,6 +99,8 @@ type Querier interface {
 	// correctness guarantee, docs/plan.md decision #2).
 	ListExpiredHolds(ctx context.Context) ([]ListExpiredHoldsRow, error)
 	ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHoldParams) ([]int64, error)
+	ListStuckOrders(ctx context.Context, arg ListStuckOrdersParams) ([]uuid.UUID, error)
+	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
 	ListUnpublishedDomainEvents(ctx context.Context, rowLimit int32) ([]ListUnpublishedDomainEventsRow, error)
 	// ListVenueSeatsOrdered drives both cmd/event-publisher's ordinal
 	// assignment and layout.json/seats.bin rendering from the SAME walk, in the
@@ -92,10 +110,14 @@ type Querier interface {
 	ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]ListVenueSeatsOrderedRow, error)
 	MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error
 	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)
+	ReallocateOrder(ctx context.Context, arg ReallocateOrderParams) error
 	// ReleaseHold: idempotent by construction — rowcount 0 is success (the
 	// hold was already gone), not an error.
 	ReleaseHold(ctx context.Context, arg ReleaseHoldParams) (int64, error)
 	SetEventOnSale(ctx context.Context, eventID int64) error
+	UpdateOrderStatus(ctx context.Context, arg UpdateOrderStatusParams) error
+	UpdatePaymentStatus(ctx context.Context, arg UpdatePaymentStatusParams) error
+	UpdateSagaStep(ctx context.Context, arg UpdateSagaStepParams) error
 }
 
 var _ Querier = (*Queries)(nil)
