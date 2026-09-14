@@ -1,15 +1,9 @@
-// cmd/reminder-scheduler is the local-dev ticker loop sending T-24h/T-2h
-// reminder one-shots (docs/plan.md Phase 9). This is a FAKE provider —
-// "sending" a reminder means logging it and recording reminders_sent, the
-// same honesty-over-completeness pattern internal/payment.FakeProvider
-// established: there is no real email/SMS integration, and the interface
-// boundary is exactly where a real one would plug in.
-//
-// moto-server is control-plane only (Phase 7's documented emulator gap:
-// "creates schedules but never fires them") — a real deployment would use
-// EventBridge Scheduler's per-ticket one-shot schedules, not a poll loop.
-// This ticker is the honest local stand-in, matching cmd/hold-reaper's own
-// "active release is UX-only, a ticker suffices locally" reasoning.
+// cmd/reminder-scheduler is the local-dev ticker loop calling
+// internal/reminder's RunOnce for both T-24h and T-2h every tick. The
+// prod twin (cmd/reminder-scheduler-lambda, Phase 11) is invoked by an
+// EventBridge Scheduler rule instead of looping — moto-server is
+// control-plane only (Phase 7's documented gap: creates schedules but
+// never fires them), so this ticker is the honest local stand-in.
 package main
 
 import (
@@ -17,18 +11,14 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ticketing/internal/config"
 	"ticketing/internal/db"
+	"ticketing/internal/reminder"
 )
 
-const (
-	reminderT24h = 24 * time.Hour
-	reminderT2h  = 2 * time.Hour
-	pollInterval = 30 * time.Second
-)
+const pollInterval = 30 * time.Second
 
 func main() {
 	cfg := config.Load()
@@ -45,31 +35,11 @@ func main() {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		runTick(ctx, q, "T-24h", reminderT24h)
-		runTick(ctx, q, "T-2h", reminderT2h)
-	}
-}
-
-// runTick finds tickets whose event starts within [now, now+lead) that
-// haven't had this specific reminder kind sent yet, "sends" it (logs), and
-// records reminders_sent — the dedup that makes a restarted scheduler, or
-// two overlapping ticks, safe.
-func runTick(ctx context.Context, q db.Querier, kind string, lead time.Duration) {
-	now := time.Now()
-	rows, err := q.ListTicketsDueForReminder(ctx, db.ListTicketsDueForReminderParams{
-		WindowLow:  pgtype.Timestamptz{Time: now, Valid: true},
-		WindowHigh: pgtype.Timestamptz{Time: now.Add(lead), Valid: true},
-		Kind:       kind,
-	})
-	if err != nil {
-		log.Printf("reminder-scheduler: list due for %s: %v", kind, err)
-		return
-	}
-	for _, r := range rows {
-		log.Printf("reminder-scheduler: [FAKE SEND] %s reminder for ticket %s (event %d starts %s)",
-			kind, r.TicketID, r.EventID, r.StartsAt.Time.Format(time.RFC3339))
-		if err := q.MarkReminderSent(ctx, db.MarkReminderSentParams{TicketID: r.TicketID, Kind: kind}); err != nil {
-			log.Printf("reminder-scheduler: mark sent failed for %s (will retry, may double-log): %v", r.TicketID, err)
+		if _, err := reminder.RunOnce(ctx, q, "T-24h", reminder.T24h); err != nil {
+			log.Printf("reminder-scheduler: T-24h tick error: %v", err)
+		}
+		if _, err := reminder.RunOnce(ctx, q, "T-2h", reminder.T2h); err != nil {
+			log.Printf("reminder-scheduler: T-2h tick error: %v", err)
 		}
 	}
 }

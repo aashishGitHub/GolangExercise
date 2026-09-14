@@ -13,3 +13,23 @@ infra/terraform/modules/*/build/
 *.tfstate.*
 *.tfvars
 # .terraform.lock.hcl is intentionally NOT ignored — committed like the sibling project
+
+# `go build ./...` run from this directory writes one binary per main
+# package straight into the repo root (Go's default -o behavior with no
+# explicit output path) — every cmd/* and cmd/*-lambda name, ignored
+# rather than relying on remembering -o /tmp/... every time.
+/server
+/server-lambda
+/event-publisher
+/outbox-relay
+/outbox-relay-lambda
+/hold-reaper
+/hold-reaper-lambda
+/projector
+/projector-lambda
+/reconciler
+/reconciler-lambda
+/saga-worker
+/saga-worker-lambda
+/reminder-scheduler
+/reminder-scheduler-lambda
