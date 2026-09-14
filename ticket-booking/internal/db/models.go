@@ -5,6 +5,7 @@
 package db
 
 import (
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -42,6 +43,19 @@ type EventSeat struct {
 	Version        int32              `json:"version"`
 	FenceToken     int64              `json:"fenceToken"`
 	UpdatedAt      pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type HoldsAudit struct {
+	ID         int64              `json:"id"`
+	HoldID     uuid.UUID          `json:"holdId"`
+	EventID    int64              `json:"eventId"`
+	SeatID     int64              `json:"seatId"`
+	UserSub    string             `json:"userSub"`
+	Outcome    string             `json:"outcome"`
+	FenceToken pgtype.Int8        `json:"fenceToken"`
+	ExpiresAt  pgtype.Timestamptz `json:"expiresAt"`
+	LatencyMs  pgtype.Int4        `json:"latencyMs"`
+	CreatedAt  pgtype.Timestamptz `json:"createdAt"`
 }
 
 type Seat struct {

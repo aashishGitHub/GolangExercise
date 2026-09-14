@@ -7,13 +7,16 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ticketing/internal/auth"
 	"ticketing/internal/config"
 	"ticketing/internal/db"
+	"ticketing/internal/holdlock"
 	"ticketing/internal/httpapi"
+	"ticketing/internal/inventory"
 	"ticketing/internal/storage"
 )
 
@@ -33,8 +36,12 @@ func main() {
 		log.Fatalf("s3 client: %v", err)
 	}
 
+	lock := holdlock.New(cfg.RedisAddr)
+	defer lock.Close()
+	inv := inventory.New(pool, q, lock, time.Duration(cfg.HoldTTLSeconds)*time.Second, cfg.MaxSeatsPerHold)
+
 	verifier := auth.NewVerifier(cfg.CognitoIssuerURL(), cfg.CognitoAudience)
-	r := httpapi.NewRouter(verifier, q, cfg.S3LayoutsBucket, s3.PublicURL)
+	r := httpapi.NewRouter(verifier, q, inv, cfg.S3LayoutsBucket, s3.PublicURL)
 
 	log.Printf("ticketing server listening on %s (env=%s)", cfg.Addr, cfg.Env)
 	if err := http.ListenAndServe(cfg.Addr, r); err != nil {

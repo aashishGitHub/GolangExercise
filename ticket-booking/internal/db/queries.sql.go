@@ -8,8 +8,73 @@ package db
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const acquireHold = `-- name: AcquireHold :many
+UPDATE event_seats
+   SET status = 1,
+       hold_id = $1, held_by = $2,
+       hold_expires_at = now() + make_interval(secs => $3::int),
+       hold_price_cents = price_cents,
+       fence_token = fence_token + 1, version = version + 1, updated_at = now()
+ WHERE event_id = $4 AND seat_id = ANY($5::bigint[])
+   AND sellable
+   AND (status = 0 OR (status IN (1, 3) AND hold_expires_at < now()))
+RETURNING seat_id, seat_ordinal, fence_token, hold_expires_at, hold_price_cents
+`
+
+type AcquireHoldParams struct {
+	HoldID     pgtype.UUID `json:"holdId"`
+	UserSub    pgtype.Text `json:"userSub"`
+	TtlSeconds int32       `json:"ttlSeconds"`
+	EventID    int64       `json:"eventId"`
+	SeatIds    []int64     `json:"seatIds"`
+}
+
+type AcquireHoldRow struct {
+	SeatID         int64              `json:"seatId"`
+	SeatOrdinal    int32              `json:"seatOrdinal"`
+	FenceToken     int64              `json:"fenceToken"`
+	HoldExpiresAt  pgtype.Timestamptz `json:"holdExpiresAt"`
+	HoldPriceCents pgtype.Int4        `json:"holdPriceCents"`
+}
+
+// AcquireHold: the arbiter. `sellable` gates the CAS so a structurally
+// unsellable seat can never be held; the status predicate is passive
+// expiry — the WHERE clause IS the guarantee, not a timer.
+func (q *Queries) AcquireHold(ctx context.Context, arg AcquireHoldParams) ([]AcquireHoldRow, error) {
+	rows, err := q.db.Query(ctx, acquireHold,
+		arg.HoldID,
+		arg.UserSub,
+		arg.TtlSeconds,
+		arg.EventID,
+		arg.SeatIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AcquireHoldRow
+	for rows.Next() {
+		var i AcquireHoldRow
+		if err := rows.Scan(
+			&i.SeatID,
+			&i.SeatOrdinal,
+			&i.FenceToken,
+			&i.HoldExpiresAt,
+			&i.HoldPriceCents,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 type BulkInsertEventSeatsParams struct {
 	EventID     int64 `json:"eventId"`
@@ -18,6 +83,47 @@ type BulkInsertEventSeatsParams struct {
 	Status      int16 `json:"status"`
 	Sellable    bool  `json:"sellable"`
 	PriceCents  int32 `json:"priceCents"`
+}
+
+const confirmSeats = `-- name: ConfirmSeats :execrows
+UPDATE event_seats es
+   SET status = 2, booking_id = $1, hold_id = NULL,
+       held_by = NULL, hold_expires_at = NULL, version = version + 1, updated_at = now()
+  FROM unnest($4::bigint[]) WITH ORDINALITY AS s (seat_id, ord)
+  JOIN unnest($5::bigint[]) WITH ORDINALITY AS f (fence, ord) ON s.ord = f.ord
+ WHERE es.event_id = $2 AND es.seat_id = s.seat_id
+   AND es.status IN (1, 3) AND es.hold_id = $3
+   AND es.fence_token = f.fence
+   AND es.hold_expires_at > now()
+`
+
+type ConfirmSeatsParams struct {
+	OrderID pgtype.UUID `json:"orderId"`
+	EventID int64       `json:"eventId"`
+	HoldID  pgtype.UUID `json:"holdId"`
+	SeatIds []int64     `json:"seatIds"`
+	Fences  []int64     `json:"fences"`
+}
+
+// ConfirmSeats: the single most important statement in the whole system.
+// fence_token equality (not >=, see fixed gap #3) is the RedLock-question
+// answer — a zombie holder whose hold was reclaimed and re-issued fails
+// here even if it somehow still holds a matching hold_id.
+// Two single-arg unnest()s zipped by WITH ORDINALITY, not the two-array
+// unnest(a, b) form — sqlc's own function catalog doesn't model that
+// overload even though Postgres itself supports it since 9.4.
+func (q *Queries) ConfirmSeats(ctx context.Context, arg ConfirmSeatsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmSeats,
+		arg.OrderID,
+		arg.EventID,
+		arg.HoldID,
+		arg.SeatIds,
+		arg.Fences,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const countAvailableSeats = `-- name: CountAvailableSeats :one
@@ -218,6 +324,37 @@ func (q *Queries) CreateVenue(ctx context.Context, arg CreateVenueParams) (Venue
 	return i, err
 }
 
+const extendHold = `-- name: ExtendHold :execrows
+UPDATE event_seats
+   SET status = 3,
+       hold_expires_at = greatest(hold_expires_at, now() + make_interval(secs => $1::int)),
+       version = version + 1, updated_at = now()
+ WHERE event_id = $2 AND seat_id = ANY($3::bigint[])
+   AND status IN (1, 3) AND hold_id = $4 AND hold_expires_at > now()
+`
+
+type ExtendHoldParams struct {
+	ExtendSeconds int32       `json:"extendSeconds"`
+	EventID       int64       `json:"eventId"`
+	SeatIds       []int64     `json:"seatIds"`
+	HoldID        pgtype.UUID `json:"holdId"`
+}
+
+// ExtendHold: called at payment initiation. rowcount < len(seats) means the
+// hold already lapsed — the saga must abort BEFORE charging.
+func (q *Queries) ExtendHold(ctx context.Context, arg ExtendHoldParams) (int64, error) {
+	result, err := q.db.Exec(ctx, extendHold,
+		arg.ExtendSeconds,
+		arg.EventID,
+		arg.SeatIds,
+		arg.HoldID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getEvent = `-- name: GetEvent :one
 SELECT event_id, venue_id, artist, title, starts_at, onsale_at, home_region, status, layout_version, created_at FROM events WHERE event_id = $1
 `
@@ -240,6 +377,95 @@ func (q *Queries) GetEvent(ctx context.Context, eventID int64) (Event, error) {
 	return i, err
 }
 
+const getSeatIDsByOrdinals = `-- name: GetSeatIDsByOrdinals :many
+
+SELECT seat_id, seat_ordinal FROM event_seats
+WHERE event_id = $1 AND seat_ordinal = ANY($2::int[])
+`
+
+type GetSeatIDsByOrdinalsParams struct {
+	EventID  int64   `json:"eventId"`
+	Ordinals []int32 `json:"ordinals"`
+}
+
+type GetSeatIDsByOrdinalsRow struct {
+	SeatID      int64 `json:"seatId"`
+	SeatOrdinal int32 `json:"seatOrdinal"`
+}
+
+// Phase 3: the correctness core (docs/plan.md "The correctness core").
+// Callers MUST pre-sort seat_ids ascending (and fences alongside them for
+// ConfirmSeats) — that ordering is what makes deadlock between two
+// concurrent multi-seat CAS statements structurally impossible, not just
+// unlikely (fixed gap #8).
+func (q *Queries) GetSeatIDsByOrdinals(ctx context.Context, arg GetSeatIDsByOrdinalsParams) ([]GetSeatIDsByOrdinalsRow, error) {
+	rows, err := q.db.Query(ctx, getSeatIDsByOrdinals, arg.EventID, arg.Ordinals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSeatIDsByOrdinalsRow
+	for rows.Next() {
+		var i GetSeatIDsByOrdinalsRow
+		if err := rows.Scan(&i.SeatID, &i.SeatOrdinal); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSeatsByHoldID = `-- name: GetSeatsByHoldID :many
+SELECT event_id, seat_id, seat_ordinal, held_by, hold_price_cents, hold_expires_at, fence_token
+FROM event_seats
+WHERE hold_id = $1
+ORDER BY seat_id
+`
+
+type GetSeatsByHoldIDRow struct {
+	EventID        int64              `json:"eventId"`
+	SeatID         int64              `json:"seatId"`
+	SeatOrdinal    int32              `json:"seatOrdinal"`
+	HeldBy         pgtype.Text        `json:"heldBy"`
+	HoldPriceCents pgtype.Int4        `json:"holdPriceCents"`
+	HoldExpiresAt  pgtype.Timestamptz `json:"holdExpiresAt"`
+	FenceToken     int64              `json:"fenceToken"`
+}
+
+// GetSeatsByHoldID: the lookup GET/DELETE /holds/{id} and POST
+// /holds/{id}/extend need — no separate `holds` table exists, so a hold's
+// seats are found by hold_id alone via event_seats_hold_id_idx.
+func (q *Queries) GetSeatsByHoldID(ctx context.Context, holdID pgtype.UUID) ([]GetSeatsByHoldIDRow, error) {
+	rows, err := q.db.Query(ctx, getSeatsByHoldID, holdID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSeatsByHoldIDRow
+	for rows.Next() {
+		var i GetSeatsByHoldIDRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.SeatID,
+			&i.SeatOrdinal,
+			&i.HeldBy,
+			&i.HoldPriceCents,
+			&i.HoldExpiresAt,
+			&i.FenceToken,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getVenue = `-- name: GetVenue :one
 SELECT venue_id, name, city, layout_version, created_at FROM venues WHERE venue_id = $1
 `
@@ -255,6 +481,82 @@ func (q *Queries) GetVenue(ctx context.Context, venueID int64) (Venue, error) {
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertHoldsAudit = `-- name: InsertHoldsAudit :exec
+INSERT INTO holds_audit (hold_id, event_id, seat_id, user_sub, outcome, fence_token, expires_at, latency_ms)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7, $8)
+`
+
+type InsertHoldsAuditParams struct {
+	HoldID     uuid.UUID          `json:"holdId"`
+	EventID    int64              `json:"eventId"`
+	SeatID     int64              `json:"seatId"`
+	UserSub    string             `json:"userSub"`
+	Outcome    string             `json:"outcome"`
+	FenceToken pgtype.Int8        `json:"fenceToken"`
+	ExpiresAt  pgtype.Timestamptz `json:"expiresAt"`
+	LatencyMs  pgtype.Int4        `json:"latencyMs"`
+}
+
+func (q *Queries) InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditParams) error {
+	_, err := q.db.Exec(ctx, insertHoldsAudit,
+		arg.HoldID,
+		arg.EventID,
+		arg.SeatID,
+		arg.UserSub,
+		arg.Outcome,
+		arg.FenceToken,
+		arg.ExpiresAt,
+		arg.LatencyMs,
+	)
+	return err
+}
+
+const listAvailableForBestAvailable = `-- name: ListAvailableForBestAvailable :many
+SELECT es.seat_id, es.seat_ordinal, st.row_id
+FROM event_seats es
+JOIN seats st ON st.seat_id = es.seat_id
+WHERE es.event_id = $1 AND es.status = 0 AND es.sellable
+  AND es.price_cents <= $2
+ORDER BY es.seat_ordinal
+`
+
+type ListAvailableForBestAvailableParams struct {
+	EventID       int64 `json:"eventId"`
+	MaxPriceCents int32 `json:"maxPriceCents"`
+}
+
+type ListAvailableForBestAvailableRow struct {
+	SeatID      int64 `json:"seatId"`
+	SeatOrdinal int32 `json:"seatOrdinal"`
+	RowID       int64 `json:"rowId"`
+}
+
+// ListAvailableForBestAvailable: candidate seats for the contiguous-run
+// scan (internal/inventory.BestAvailable) — row_id is included because
+// ordinals are contiguous ACROSS a whole section, not just within one row
+// (decision #2), so a run must be broken at a row boundary in Go, not just
+// by ordinal adjacency.
+func (q *Queries) ListAvailableForBestAvailable(ctx context.Context, arg ListAvailableForBestAvailableParams) ([]ListAvailableForBestAvailableRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableForBestAvailable, arg.EventID, arg.MaxPriceCents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAvailableForBestAvailableRow
+	for rows.Next() {
+		var i ListAvailableForBestAvailableRow
+		if err := rows.Scan(&i.SeatID, &i.SeatOrdinal, &i.RowID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listClosedSectionsForEvent = `-- name: ListClosedSectionsForEvent :many
@@ -474,6 +776,30 @@ func (q *Queries) MinEventPriceCents(ctx context.Context, eventID int64) (int32,
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const releaseHold = `-- name: ReleaseHold :execrows
+UPDATE event_seats
+   SET status = 0, hold_id = NULL, held_by = NULL, hold_expires_at = NULL, hold_price_cents = NULL,
+       version = version + 1, updated_at = now()
+ WHERE event_id = $1 AND seat_id = ANY($2::bigint[])
+   AND status IN (1, 3) AND hold_id = $3
+`
+
+type ReleaseHoldParams struct {
+	EventID int64       `json:"eventId"`
+	SeatIds []int64     `json:"seatIds"`
+	HoldID  pgtype.UUID `json:"holdId"`
+}
+
+// ReleaseHold: idempotent by construction — rowcount 0 is success (the
+// hold was already gone), not an error.
+func (q *Queries) ReleaseHold(ctx context.Context, arg ReleaseHoldParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseHold, arg.EventID, arg.SeatIds, arg.HoldID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setEventOnSale = `-- name: SetEventOnSale :exec

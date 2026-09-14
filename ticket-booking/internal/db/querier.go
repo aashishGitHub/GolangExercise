@@ -6,13 +6,27 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	// AcquireHold: the arbiter. `sellable` gates the CAS so a structurally
+	// unsellable seat can never be held; the status predicate is passive
+	// expiry — the WHERE clause IS the guarantee, not a timer.
+	AcquireHold(ctx context.Context, arg AcquireHoldParams) ([]AcquireHoldRow, error)
 	// BulkInsertEventSeats: cmd/event-publisher's population step, via pgx's
 	// CopyFrom (sqlc :copyfrom) rather than one INSERT per row — the walk is
 	// 30,000+ rows for a large venue.
 	BulkInsertEventSeats(ctx context.Context, arg []BulkInsertEventSeatsParams) (int64, error)
+	// ConfirmSeats: the single most important statement in the whole system.
+	// fence_token equality (not >=, see fixed gap #3) is the RedLock-question
+	// answer — a zombie holder whose hold was reclaimed and re-issued fails
+	// here even if it somehow still holds a matching hold_id.
+	// Two single-arg unnest()s zipped by WITH ORDINALITY, not the two-array
+	// unnest(a, b) form — sqlc's own function catalog doesn't model that
+	// overload even though Postgres itself supports it since 9.4.
+	ConfirmSeats(ctx context.Context, arg ConfirmSeatsParams) (int64, error)
 	// CountAvailableSeats: fine at catalog-listing scale (one query per event in
 	// a <=100-row page); revisit with a materialized per-event counter only if
 	// this becomes a measured bottleneck.
@@ -27,8 +41,28 @@ type Querier interface {
 	// catalog/availability/pricing read path. Hold/release/confirm CAS queries
 	// land in Phase 3 alongside internal/inventory.
 	CreateVenue(ctx context.Context, arg CreateVenueParams) (Venue, error)
+	// ExtendHold: called at payment initiation. rowcount < len(seats) means the
+	// hold already lapsed — the saga must abort BEFORE charging.
+	ExtendHold(ctx context.Context, arg ExtendHoldParams) (int64, error)
 	GetEvent(ctx context.Context, eventID int64) (Event, error)
+	// Phase 3: the correctness core (docs/plan.md "The correctness core").
+	// Callers MUST pre-sort seat_ids ascending (and fences alongside them for
+	// ConfirmSeats) — that ordering is what makes deadlock between two
+	// concurrent multi-seat CAS statements structurally impossible, not just
+	// unlikely (fixed gap #8).
+	GetSeatIDsByOrdinals(ctx context.Context, arg GetSeatIDsByOrdinalsParams) ([]GetSeatIDsByOrdinalsRow, error)
+	// GetSeatsByHoldID: the lookup GET/DELETE /holds/{id} and POST
+	// /holds/{id}/extend need — no separate `holds` table exists, so a hold's
+	// seats are found by hold_id alone via event_seats_hold_id_idx.
+	GetSeatsByHoldID(ctx context.Context, holdID pgtype.UUID) ([]GetSeatsByHoldIDRow, error)
 	GetVenue(ctx context.Context, venueID int64) (Venue, error)
+	InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditParams) error
+	// ListAvailableForBestAvailable: candidate seats for the contiguous-run
+	// scan (internal/inventory.BestAvailable) — row_id is included because
+	// ordinals are contiguous ACROSS a whole section, not just within one row
+	// (decision #2), so a run must be broken at a row boundary in Go, not just
+	// by ordinal adjacency.
+	ListAvailableForBestAvailable(ctx context.Context, arg ListAvailableForBestAvailableParams) ([]ListAvailableForBestAvailableRow, error)
 	// A section counts as closed for this event only once every seat in it is
 	// unsellable — closedSections is denormalized FROM event_seats.sellable,
 	// never the other way round (docs/plan.md, fixed gap #2).
@@ -49,6 +83,9 @@ type Querier interface {
 	// disagree (docs/plan.md "Event publish pipeline").
 	ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]ListVenueSeatsOrderedRow, error)
 	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)
+	// ReleaseHold: idempotent by construction — rowcount 0 is success (the
+	// hold was already gone), not an error.
+	ReleaseHold(ctx context.Context, arg ReleaseHoldParams) (int64, error)
 	SetEventOnSale(ctx context.Context, eventID int64) error
 }
 

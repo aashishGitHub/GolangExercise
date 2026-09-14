@@ -246,16 +246,94 @@ Terraform has been successfully initialized!
 Success! The configuration is valid.
 ```
 
-## Phase 3 — Hold / release / confirm CAS — the keystone
-- [ ] `internal/holdlock` (SET NX PX + Lua compare-and-delete)
-- [ ] `internal/inventory`: Acquire / Release / Extend / Confirm / best-available
-- [ ] Migration 0003 `holds_audit`
-- [ ] Hold/release/best-available routes, 409 mapping
-- [ ] TF: `cache` module
-- [ ] **Verify — the project's thesis:** `TestAcquireHold_ExactlyOneWinnerUnderRace` (200 goroutines,
-      20× repeated), `..._WithRedisFlushed`, `TestConfirm_ExactlyOneWinner`,
-      `TestExpiredHoldIsReclaimed`, `TestStaleFenceRejected`, multi-seat overlap (loser's other seats
-      stay AVAILABLE), gomock unit tests with committed mocks
+## Phase 3 — Hold / release / confirm CAS — the keystone ✅ 2026-09-14
+- [x] `internal/holdlock` (SET NX PX + Lua compare-and-delete), with a `Locker` interface so
+      `internal/inventory` doesn't depend on the concrete Redis client type
+- [x] `internal/inventory`: Acquire / Release / Extend / Confirm / BestAvailable — the hard invariant
+      ("no package other than `inventory` may write `event_seats`") stated in the package comment
+- [x] Migration 0003 `holds_audit` + migration 0004 (an index for hold-by-id lookups — see the
+      deviation note below)
+- [x] Hold/release/extend/best-available routes, 409/410/422 mapping
+- [x] TF: `cache` module (ElastiCache, cluster-mode disabled, `noeviction`, no snapshot persistence —
+      each tied in a comment to "Redis is never the arbiter")
+- [x] **Verify — the project's thesis, proven not asserted:** all pass, see real output below.
+
+**Deviation from the original plan, noted rather than silently done:** there is no separate `holds`
+table. Hold state lives entirely in `event_seats`, keyed by `hold_id`. `GET/DELETE /holds/{id}` and
+`POST /holds/{id}/extend` need to look a hold up by id alone (no `event_id` in the path), so migration
+0004 adds a partial index (`event_seats_hold_id_idx ... WHERE hold_id IS NOT NULL`) rather than a
+sequential scan. A dedicated `holds` table would be the alternative at real scale — documented as a
+deliberate scope simplification, not an oversight.
+
+**Minor known limitation, also noted rather than hidden:** when the Redis fast-path rejects a
+multi-seat request, `ConflictError.Conflicts` reports only the *first* conflicting seat (Redis fails
+fast on the first `SET NX` miss and doesn't check the rest of the batch) — a DB-CAS-level conflict
+(`LOST_DB_CAS`), by contrast, reports *every* conflicting seat, since the CAS's `RETURNING` diff
+naturally has that information. Both are correct (no double-book either way); the Redis path is just
+less informative in its 409 body. Fine for now — this only affects UX (which seats the client
+repaints), never correctness.
+
+**Verification (real output, 2026-09-14):**
+```
+$ go test -tags=integration ./internal/holdlock/... -v
+--- PASS: TestAcquire_FirstWinsSecondLoses
+--- PASS: TestRelease_OnlyCurrentHolderCanDelete   # only the compare-and-delete's actual owner can free it
+--- PASS: TestAcquire_ExpiresAfterTTL
+--- PASS: TestAcquire_UnreachableRedisReturnsErrUnavailable
+PASS
+
+$ go test -tags=integration ./internal/inventory/... -v
+--- PASS: TestAcquireHold_ExactlyOneWinnerUnderRace          (20/20 subtests, 200 goroutines each)
+--- PASS: TestAcquireHold_ExactlyOneWinnerUnderRace_WithRedisFlushed   # FLUSHALL every 5ms throughout —
+                                                                         # still exactly 1 winner, 199 losers
+--- PASS: TestConfirm_ExactlyOneWinner                        (50 concurrent confirms, 1 succeeds)
+--- PASS: TestExpiredHoldIsReclaimed                          # passive expiry alone, Redis never touched
+--- PASS: TestStaleFenceRejected                              # zombie's old fence rejected after reclaim
+--- PASS: TestMultiSeatOverlap_LoserSeatsStayAvailableNotOrphaned
+--- PASS: TestBestAvailable_AcquiresARealContiguousRun        # against real seed-venue row data
+--- PASS: TestBestAvailable_NoRunLargeEnoughReturnsErrNoContiguousSeats
+--- PASS: TestAcquireHold_DuplicateSeatRejectedBeforeAnyIO    (gomock)
+--- PASS: TestAcquireHold_TooManySeatsRejectedBeforeAnyIO     (gomock)
+--- PASS: TestReleaseHold_RowcountZeroIsSuccessNotError       (gomock)
+--- PASS: TestExtendHold_ShortRowcountReturnsErrHoldExpired   (gomock)
+--- PASS: TestFindContiguousRuns_BreaksAtRowBoundary          # ordinal-adjacent but different row: rejected
+PASS
+$ go test -tags=integration ./internal/inventory/... -count=1   # re-run, no flakiness
+ok  	ticketing/internal/inventory	3.289s
+
+# The partial-match/rollback mechanic ConfirmSeats depends on, hand-verified
+# in psql before writing any Go around it (mirrors the sibling's own house style):
+$ psql -c "BEGIN; UPDATE event_seats ... unnest(...) WITH ORDINALITY ...; -- UPDATE 1 (only 1 of 2 seats matched)
+            ROLLBACK;"
+UPDATE 1
+ROLLBACK
+$ psql -c "SELECT seat_id,status,fence_token FROM event_seats WHERE event_id=1 AND seat_id IN (3,4)"
+ seat_id | status | fence_token
+       3 |      1 |           1      -- unchanged: the partial UPDATE was fully rolled back
+       4 |      1 |           1
+
+# Full HTTP lifecycle against the real stack (real cognito-local token, real Postgres+Redis):
+$ curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"seatOrdinals":[500,501]}' \
+    localhost:8080/api/v1/events/1/holds
+{"holdId":"a652c1e8-...","seats":[...],"expiresAt":"...","fenceTokens":{"501":"1","510":"1"},"totalCents":50000}
+$ curl -X POST ... -d '{"seatOrdinals":[500,501]}' ...        # same seats again
+{"code":"SEAT_TAKEN","conflicts":[501],"message":"..."}                                    HTTP 409
+$ curl -X DELETE .../holds/a652c1e8-...                                                     HTTP 204
+$ curl .../holds/a652c1e8-...                                  # after delete
+{"code":"gone","message":"hold not found or already released/confirmed"}                    HTTP 410
+$ curl -X DELETE .../holds/a652c1e8-...                        # idempotent re-delete         HTTP 204
+$ curl -X POST ... -d '{"seatOrdinals":[500,501]}' ...         # re-hold after release
+{"holdId":"35ca43fe-...","fenceTokens":{"501":"2","510":"2"}, ...}                          HTTP 201
+                                                                 # fence bumped 1 -> 2, as designed
+$ curl -X POST ... -d '{"quantity":3,"maxPriceCents":30000,"bestAvailable":true}' \
+    localhost:8080/api/v1/events/1/holds
+{"seats":[{"seatOrdinal":0,...},{"seatOrdinal":1,...},{"seatOrdinal":2,...}], ...}          HTTP 201
+                                                                 # 3 contiguous seats, front row
+
+$ cd infra/terraform/envs/local && terraform init -upgrade && terraform validate
+Terraform has been successfully initialized!
+Success! The configuration is valid.
+```
 
 ## Phase 4 — Canvas seat map + a11y tree
 - [ ] `SeatIndex`, flat quadtree (main + worker copies), LOD with incremental `sectionFreeCount`
@@ -328,7 +406,15 @@ deadlock-ordering requirement, duplicate-seat validation, contiguous best-availa
 seats per hold, reallocation's effect on `orders`, refund modeling as its own table, admission-token
 vs. active-hold exemption, hold ownership check on Release). See `docs/plan.md` for the fixed text.
 
-**2026-09-14** — `go 1.25` used instead of the sibling's `go 1.26`: the installed toolchain here is
-1.25.6, and `1.26` isn't released yet at time of writing. Pinning to what's actually installed avoids
-depending on `GOTOOLCHAIN=auto` reaching the network to download a newer toolchain during CI/local
-dev. Revisit once 1.26 is out and installed.
+**2026-09-14** — `go 1.25` used instead of the sibling's `go 1.26`: the installed `go` binary on this
+machine is 1.25.6. (Correction to an earlier note here: a `golang:1.26.x-alpine` Docker image exists
+locally, so 1.26 may well be released — the actual constraint is simply that the local toolchain is
+1.25.6, not that 1.26 doesn't exist.) Pinning `go.mod` to what's actually installed avoids depending
+on `GOTOOLCHAIN=auto` reaching the network to fetch a newer toolchain during CI/local dev. Revisit
+once the local `go` binary itself is upgraded to 1.26.
+
+**2026-09-14** — Phase 3: no separate `holds` table exists; hold state lives in `event_seats` alone,
+looked up by a partial index on `hold_id` (migration 0004). A `ConflictError` from the Redis fast-path
+reports only the first conflicting seat, not all of them (a DB-CAS-level conflict reports all). Both
+noted in Phase 3's own section above with the reasoning; repeated here per this file's "append a note
+when a decision changes" convention.

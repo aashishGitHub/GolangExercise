@@ -53,6 +53,15 @@ module "database" {
   db_password                 = module.secrets.db_password
 }
 
-# Remaining modules (cache, auth, storage, compute, api, websocket, eventing,
+module "cache" {
+  source = "../../modules/cache"
+
+  name_prefix             = local.name_prefix
+  private_subnet_ids      = module.network.private_subnet_ids
+  redis_security_group_id = module.network.redis_security_group_id
+  redis_auth_token        = module.secrets.redis_auth_token
+}
+
+# Remaining modules (auth, storage, compute, api, websocket, eventing,
 # waf, observability, gated search, waitingroom) are added phase by phase —
 # see docs/plan.md "Terraform modules" for the phase-by-phase table.
