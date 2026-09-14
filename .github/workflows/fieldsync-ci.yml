@@ -1,0 +1,64 @@
+name: fieldsync-ci
+
+# Scoped to offline-sync-app/ so this doesn't run for unrelated changes
+# elsewhere in this monorepo. Test + build only — no `terraform apply`, no
+# Lambda/S3/CloudFront deploy step. Those land once real AWS access is
+# explicitly approved (see offline-sync-app/MILESTONES.md, Phase 5).
+on:
+  push:
+    paths: ["offline-sync-app/**"]
+  pull_request:
+    paths: ["offline-sync-app/**"]
+
+defaults:
+  run:
+    working-directory: offline-sync-app
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: offline-sync-app/go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      # Cross-compile check only — proves cmd/lambda still builds for the
+      # provided.al2023/arm64 target the compute Terraform module deploys.
+      # Not wired to any deploy step.
+      - run: GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/lambda
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: offline-sync-app/web/package-lock.json
+      - working-directory: offline-sync-app/web
+        run: npm ci
+      - working-directory: offline-sync-app/web
+        run: npm run build
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+      # No AWS credentials configured — this only checks the HCL itself
+      # parses/type-checks, mirroring infra/terraform/envs/local's own
+      # placeholder-credentials provider block. Never `plan` or `apply`.
+      - working-directory: offline-sync-app/infra/terraform/envs/local
+        run: |
+          # Build/lambda dependency validate needs a zip on disk to exist, even
+          # though this job never invokes it — a zero-byte placeholder is enough.
+          mkdir -p ../../modules/compute/build
+          touch ../../modules/compute/build/bootstrap.zip
+          terraform init -backend=false
+          terraform validate

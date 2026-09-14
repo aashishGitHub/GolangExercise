@@ -1,0 +1,73 @@
+name: fieldsync
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: fieldsync
+      POSTGRES_PASSWORD: fieldsync
+      POSTGRES_DB: fieldsync
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fieldsync"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Dedicated Cognito User Pool emulator — free tier LocalStack doesn't cover
+  # Cognito, so this stands in for the real Amazon Cognito user pool locally.
+  # Pinned to >=4.0.0: earlier versions lack the .well-known/openid-configuration
+  # + jwks.json endpoints our JWT-verification middleware depends on (added in
+  # jagregory/cognito-local#348, released 3.23.3). That fix hardcodes port 9229
+  # in the returned issuer/jwks URLs regardless of the actual configured port —
+  # we keep the default 9229 below specifically to stay clear of that bug.
+  cognito-local:
+    image: jagregory/cognito-local:4.0.0
+    environment:
+      # Fixes the signUp/MFA confirmation code so local dev/tests don't need
+      # to read it out of container logs after every signup.
+      CODE: "123456"
+    ports:
+      - "9229:9229"
+    volumes:
+      - cognito-local-data:/app/.cognito
+
+  # S3 stand-in for photo uploads. NOT LocalStack: as of this writing,
+  # LocalStack's image refuses to start at all without a LOCALSTACK_AUTH_TOKEN
+  # (verified directly — it exits with "License activation failed" even for
+  # S3, which every free-tier doc implied was included). MinIO is genuinely
+  # free/open-source (AGPLv3), needs no account/token, and speaks the same S3
+  # API our client already targets via a custom endpoint + path-style
+  # addressing, so swapping the backend was a zero-Go-code-change fix.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: localdevuser
+      MINIO_ROOT_PASSWORD: localdevpassword
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # web console
+    volumes:
+      - minio-data:/data
+
+  # EventBridge/SQS/DynamoDB/etc. (Phase 7) still need a decision now that
+  # LocalStack is off the table for local dev — revisit then (candidates:
+  # ElasticMQ for SQS, amazon/dynamodb-local for DynamoDB, Moto for
+  # EventBridge — see moto-server below, already Moto-based).
+  moto-server:
+    image: motoserver/moto:latest
+    environment:
+      MOTO_PORT: "5000"
+    ports:
+      # Host port 5000 collides with macOS's AirPlay Receiver (ControlCenter) —
+      # remapped to 5001 on the host; the container's internal port is unaffected.
+      - "5001:5000"
+
+volumes:
+  postgres-data:
+  cognito-local-data:
+  minio-data:

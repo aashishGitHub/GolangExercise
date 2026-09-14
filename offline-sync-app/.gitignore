@@ -1,0 +1,25 @@
+# Go
+/fieldsync
+*.test
+
+# Node / web
+web/node_modules/
+web/dist/
+web/dev-dist/
+
+# Env
+.env
+.env.local
+
+# Terraform
+infra/terraform/modules/compute/build/
+infra/terraform/modules/eventing/build/
+infra/terraform/modules/websocket/build/
+infra/terraform/**/.terraform/
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.backup
+infra/terraform/**/*.tfvars
+# .terraform.lock.hcl is intentionally NOT ignored — Terraform recommends committing it
+
+# Local emulator data (docker volumes are named volumes, this covers any bind mounts)
+.cognito/
