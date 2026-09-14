@@ -16,6 +16,7 @@ import (
 	"ticketing/internal/inventory"
 	"ticketing/internal/order"
 	"ticketing/internal/projector"
+	"ticketing/internal/waitingroom"
 	"ticketing/internal/wshub"
 )
 
@@ -23,8 +24,10 @@ import (
 // availability/pricing/layout routes are open; identity-bearing routes
 // (whoami, holds) are wrapped by the auth verifier — "auth gates the API,
 // not browsing the static seat map assets", mirroring the sibling's "auth
-// gates sync, not capture" split.
-func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, hub *wshub.Hub, proj *projector.Projector, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
+// gates sync, not capture" split. wq (nil-safe) additionally gates
+// POST .../holds behind X-Admission-Token — docs/plan.md's waiting room —
+// and metrics (nil-safe) feeds the AIMD controller's hold-latency input.
+func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, hub *wshub.Hub, proj *projector.Projector, wq *waitingroom.Queue, metrics *waitingroom.HoldMetrics, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -48,8 +51,9 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, or
 	r.Get("/ws", hub.ServeWS)
 
 	cat := &catalogAPI{q: q, proj: proj, layoutsBucket: layoutsBucket, publicURL: publicURL}
-	holds := &holdsAPI{inv: inv, q: q}
+	holds := &holdsAPI{inv: inv, q: q, metrics: metrics}
 	ord := &ordersAPI{orders: orders, q: q}
+	wr := &waitingRoomAPI{q: wq}
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/events", cat.listEvents)
@@ -62,7 +66,16 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, or
 			authed.Use(verifier.Middleware)
 			authed.Get("/whoami", handleWhoami)
 
-			authed.Post("/events/{eventID}/holds", holds.createHold)
+			authed.Post("/events/{eventID}/queue", wr.joinQueue)
+
+			// POST .../holds ALONE is gated behind admission — GET/DELETE
+			// and extend act on a hold the caller already legitimately
+			// holds, so re-checking admission there protects nothing.
+			if wq != nil {
+				authed.With(wq.RequireAdmission).Post("/events/{eventID}/holds", holds.createHold)
+			} else {
+				authed.Post("/events/{eventID}/holds", holds.createHold)
+			}
 			authed.Get("/holds/{holdID}", holds.getHold)
 			authed.Delete("/holds/{holdID}", holds.deleteHold)
 			authed.Post("/holds/{holdID}/extend", holds.extendHold)

@@ -16,14 +16,16 @@ import (
 	"ticketing/internal/auth"
 	"ticketing/internal/db"
 	"ticketing/internal/inventory"
+	"ticketing/internal/waitingroom"
 )
 
 // holdsAPI holds the routes that mutate event_seats — all authenticated
 // (mounted under the auth-gated group in router.go), unlike catalogAPI's
 // open reads.
 type holdsAPI struct {
-	inv *inventory.Service
-	q   db.Querier
+	inv     *inventory.Service
+	q       db.Querier
+	metrics *waitingroom.HoldMetrics // nil-safe: only wired when the AIMD controller is running
 }
 
 type createHoldRequest struct {
@@ -57,6 +59,7 @@ func (h *holdsAPI) createHold(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var hold *inventory.Hold
+	start := time.Now()
 	if req.BestAvailable {
 		hold, err = h.inv.BestAvailable(ctx, eventID, req.Quantity, req.MaxPriceCents, claims.Sub)
 	} else {
@@ -66,6 +69,14 @@ func (h *holdsAPI) createHold(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		hold, err = h.inv.AcquireHold(ctx, eventID, seatIDs, claims.Sub)
+	}
+	// Recorded for EVERY attempt, including a losing 409 SEAT_TAKEN — the
+	// AIMD controller's "hold error rate" input is about system health
+	// (5xx/timeouts), but a ConflictError is domain-expected, not a
+	// failure; only writeHoldResultOrError's underlying status matters
+	// here, so record based on whether err is a *system* problem.
+	if h.metrics != nil {
+		h.metrics.Record(time.Since(start), isSystemError(err))
 	}
 
 	writeHoldResultOrError(w, hold, err)
@@ -280,6 +291,28 @@ func holdResponse(hold *inventory.Hold) map[string]any {
 // exact status codes docs/plan.md's "Status-code semantics" specifies —
 // 409 SEAT_TAKEN is the dominant non-2xx during an on-sale and must be
 // fast and cheap; it is the system working, not a failure.
+// isSystemError mirrors writeInventoryError's classification: every named
+// inventory error is a domain-expected outcome (a losing 409, a validation
+// 422) that says nothing about system health. Only an UNRECOGNIZED error —
+// the writeInventoryError default case, a real 500 — counts as a system
+// failure for the AIMD controller's error-rate input.
+func isSystemError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var conflictErr *inventory.ConflictError
+	switch {
+	case errors.As(err, &conflictErr),
+		errors.Is(err, inventory.ErrHoldExpired),
+		errors.Is(err, inventory.ErrTooManySeats),
+		errors.Is(err, inventory.ErrDuplicateSeat),
+		errors.Is(err, inventory.ErrNoContiguousSeats):
+		return false
+	default:
+		return true
+	}
+}
+
 func writeInventoryError(w http.ResponseWriter, err error) {
 	var conflictErr *inventory.ConflictError
 	switch {

@@ -501,6 +501,35 @@ func (mr *MockQuerierMockRecorder) InsertWSConnection(ctx, arg any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertWSConnection", reflect.TypeOf((*MockQuerier)(nil).InsertWSConnection), ctx, arg)
 }
 
+// InsertWaitingRoomAudit mocks base method.
+func (m *MockQuerier) InsertWaitingRoomAudit(ctx context.Context, arg db.InsertWaitingRoomAuditParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertWaitingRoomAudit", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertWaitingRoomAudit indicates an expected call of InsertWaitingRoomAudit.
+func (mr *MockQuerierMockRecorder) InsertWaitingRoomAudit(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertWaitingRoomAudit", reflect.TypeOf((*MockQuerier)(nil).InsertWaitingRoomAudit), ctx, arg)
+}
+
+// ListAllEventIDs mocks base method.
+func (m *MockQuerier) ListAllEventIDs(ctx context.Context) ([]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAllEventIDs", ctx)
+	ret0, _ := ret[0].([]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAllEventIDs indicates an expected call of ListAllEventIDs.
+func (mr *MockQuerierMockRecorder) ListAllEventIDs(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAllEventIDs", reflect.TypeOf((*MockQuerier)(nil).ListAllEventIDs), ctx)
+}
+
 // ListAvailableForBestAvailable mocks base method.
 func (m *MockQuerier) ListAvailableForBestAvailable(ctx context.Context, arg db.ListAvailableForBestAvailableParams) ([]db.ListAvailableForBestAvailableRow, error) {
 	m.ctrl.T.Helper()
@@ -694,6 +723,21 @@ func (m *MockQuerier) ListVenueSeatsOrdered(ctx context.Context, venueID int64) 
 func (mr *MockQuerierMockRecorder) ListVenueSeatsOrdered(ctx, venueID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListVenueSeatsOrdered", reflect.TypeOf((*MockQuerier)(nil).ListVenueSeatsOrdered), ctx, venueID)
+}
+
+// ListWaitingRoomAudit mocks base method.
+func (m *MockQuerier) ListWaitingRoomAudit(ctx context.Context, eventID int64) ([]db.WaitingRoomAudit, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListWaitingRoomAudit", ctx, eventID)
+	ret0, _ := ret[0].([]db.WaitingRoomAudit)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListWaitingRoomAudit indicates an expected call of ListWaitingRoomAudit.
+func (mr *MockQuerierMockRecorder) ListWaitingRoomAudit(ctx, eventID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListWaitingRoomAudit", reflect.TypeOf((*MockQuerier)(nil).ListWaitingRoomAudit), ctx, eventID)
 }
 
 // MarkDomainEventPublished mocks base method.

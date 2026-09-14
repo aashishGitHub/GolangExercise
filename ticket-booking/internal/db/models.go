@@ -165,6 +165,20 @@ type Venue struct {
 	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
 }
 
+type WaitingRoomAudit struct {
+	ID              int64              `json:"id"`
+	EventID         int64              `json:"eventId"`
+	Rate            float64            `json:"rate"`
+	CursorValue     int64              `json:"cursorValue"`
+	HoldP99Ms       float64            `json:"holdP99Ms"`
+	PoolUtilization float64            `json:"poolUtilization"`
+	HoldErrorRate   float64            `json:"holdErrorRate"`
+	RedLatency      bool               `json:"redLatency"`
+	RedPool         bool               `json:"redPool"`
+	RedErrors       bool               `json:"redErrors"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+}
+
 type WsConnection struct {
 	ConnectionID   uuid.UUID          `json:"connectionId"`
 	EventID        int64              `json:"eventId"`
