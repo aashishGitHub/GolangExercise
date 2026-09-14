@@ -39,6 +39,7 @@ type Config struct {
 	HoldTTLSeconds    int    // HOLD_TTL_SECONDS
 	MaxSeatsPerHold   int    // MAX_SEATS_PER_HOLD
 	WaitingRoomSecret string // WAITING_ROOM_SECRET — HMAC key for admission tokens
+	QRSigningSecret   string // QR_SIGNING_SECRET — env key locally, KMS in prod (docs/plan.md Signer)
 
 	// Fake payment provider pathology injection (internal/payment) — all
 	// default to 0 so ordinary dev stays clean; the load harness (Phase 10)
@@ -76,6 +77,7 @@ func Load() Config {
 		HoldTTLSeconds:    atoiOr(getenv("HOLD_TTL_SECONDS", "600"), 600),
 		MaxSeatsPerHold:   atoiOr(getenv("MAX_SEATS_PER_HOLD", "8"), 8),
 		WaitingRoomSecret: getenv("WAITING_ROOM_SECRET", "local-dev-only-insecure-secret"),
+		QRSigningSecret:   getenv("QR_SIGNING_SECRET", "local-dev-only-insecure-qr-secret"),
 
 		PaymentFailRate:      atofOr(getenv("PAYMENT_FAIL_RATE", "0"), 0),
 		PaymentTimeoutRate:   atofOr(getenv("PAYMENT_TIMEOUT_RATE", "0"), 0),

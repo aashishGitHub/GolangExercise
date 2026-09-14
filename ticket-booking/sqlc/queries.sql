@@ -368,3 +368,39 @@ SELECT * FROM waiting_room_audit WHERE event_id = sqlc.arg(event_id) ORDER BY id
 -- cheap; a real deployment would scope this to events currently on sale.
 -- name: ListAllEventIDs :many
 SELECT event_id FROM events ORDER BY event_id;
+
+-- Phase 9 (internal/ticketing): one ticket per seat in a CONFIRMED/
+-- TICKETED order — event_seats.booking_id IS the order<->seat link, no
+-- separate order_items table exists.
+-- name: ListSeatIDsForOrder :many
+SELECT seat_id FROM event_seats WHERE event_id = sqlc.arg(event_id) AND booking_id = sqlc.arg(booking_id);
+
+-- name: InsertTicket :one
+INSERT INTO tickets (ticket_id, order_id, event_id, seat_id, qr_s3_key)
+VALUES (sqlc.arg(ticket_id), sqlc.arg(order_id), sqlc.arg(event_id), sqlc.arg(seat_id), sqlc.arg(qr_s3_key))
+RETURNING *;
+
+-- name: GetTicket :one
+SELECT * FROM tickets WHERE ticket_id = sqlc.arg(ticket_id);
+
+-- RedeemTicket: the CAS that makes "redeem twice -> 409" work — matches
+-- rowcount 0 means already redeemed or revoked, not a separate read+check.
+-- name: RedeemTicket :execrows
+UPDATE tickets SET redeemed_at = now()
+WHERE ticket_id = sqlc.arg(ticket_id) AND redeemed_at IS NULL AND revoked_at IS NULL;
+
+-- window_low/window_high are absolute timestamps computed in Go (now +/-
+-- the reminder lead time), not INTERVAL arithmetic in SQL — simpler typing
+-- across the sqlc boundary, and it's cmd/reminder-scheduler's own clock
+-- that should own "what does T-24h mean", not the query.
+-- name: ListTicketsDueForReminder :many
+SELECT t.ticket_id, t.event_id, e.starts_at
+FROM tickets t
+JOIN events e ON e.event_id = t.event_id
+WHERE t.revoked_at IS NULL
+  AND e.starts_at BETWEEN sqlc.arg(window_low) AND sqlc.arg(window_high)
+  AND NOT EXISTS (SELECT 1 FROM reminders_sent r WHERE r.ticket_id = t.ticket_id AND r.kind = sqlc.arg(kind));
+
+-- name: MarkReminderSent :exec
+INSERT INTO reminders_sent (ticket_id, kind) VALUES (sqlc.arg(ticket_id), sqlc.arg(kind))
+ON CONFLICT DO NOTHING;

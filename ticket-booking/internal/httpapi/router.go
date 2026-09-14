@@ -16,6 +16,7 @@ import (
 	"ticketing/internal/inventory"
 	"ticketing/internal/order"
 	"ticketing/internal/projector"
+	"ticketing/internal/ticketing"
 	"ticketing/internal/waitingroom"
 	"ticketing/internal/wshub"
 )
@@ -27,7 +28,7 @@ import (
 // gates sync, not capture" split. wq (nil-safe) additionally gates
 // POST .../holds behind X-Admission-Token — docs/plan.md's waiting room —
 // and metrics (nil-safe) feeds the AIMD controller's hold-latency input.
-func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, hub *wshub.Hub, proj *projector.Projector, wq *waitingroom.Queue, metrics *waitingroom.HoldMetrics, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
+func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, hub *wshub.Hub, proj *projector.Projector, wq *waitingroom.Queue, metrics *waitingroom.HoldMetrics, tix *ticketing.Service, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -44,16 +45,21 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, or
 		AllowCredentials: false,
 	}))
 
+	cat := &catalogAPI{q: q, proj: proj, layoutsBucket: layoutsBucket, publicURL: publicURL}
+	holds := &holdsAPI{inv: inv, q: q, metrics: metrics}
+	ord := &ordersAPI{orders: orders, q: q}
+	wr := &waitingRoomAPI{q: wq}
+	tixAPI := &ticketingAPI{svc: tix, q: q}
+
 	r.Get("/health", handleHealth)
 	// Outside /api/v1 deliberately: this is not a REST resource, and a
 	// real API Gateway WebSocket API is a completely separate endpoint
 	// from the HTTP API in front of everything else here.
 	r.Get("/ws", hub.ServeWS)
-
-	cat := &catalogAPI{q: q, proj: proj, layoutsBucket: layoutsBucket, publicURL: publicURL}
-	holds := &holdsAPI{inv: inv, q: q, metrics: metrics}
-	ord := &ordersAPI{orders: orders, q: q}
-	wr := &waitingRoomAPI{q: wq}
+	// Deliberately unauthenticated: the scanned QR token IS the
+	// credential, same as a paper ticket's barcode — a gate scanner
+	// device carries no attendee JWT.
+	r.Post("/gate/redeem", tixAPI.redeemGate)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Get("/events", cat.listEvents)
@@ -82,6 +88,8 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, or
 
 			authed.Post("/orders", ord.createOrder)
 			authed.Get("/orders/{orderID}", ord.getOrder)
+
+			authed.Get("/tickets/{ticketID}/qr", tixAPI.getTicketQR)
 		})
 	})
 

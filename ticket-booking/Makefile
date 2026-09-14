@@ -12,7 +12,14 @@ test:
 	go test ./...
 
 test-integration:
-	go test -tags=integration ./...
+	# -p 1: serialize package test binaries. Phases 7-9 added tests whose
+	# invariant/backlog scans are GLOBAL (all domain_events, all orders),
+	# not scoped per test — Go runs different packages' tests concurrently
+	# by default, so two packages' test binaries hitting the same shared
+	# local Postgres/Redis at once produced real, reproducible
+	# cross-package flakes (caught in Phase 9's MILESTONES.md verification,
+	# not theoretical).
+	go test -tags=integration -p 1 ./...
 
 compose-up:
 	docker compose up -d

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -20,8 +21,9 @@ import (
 )
 
 type Client struct {
-	s3       *s3.Client
-	endpoint string // local-dev only; empty in prod (see PublicURL)
+	s3        *s3.Client
+	presigner *s3.PresignClient
+	endpoint  string // local-dev only; empty in prod (see PublicURL)
 }
 
 func New(ctx context.Context, endpoint, region, accessKey, secretKey string) (*Client, error) {
@@ -42,7 +44,23 @@ func New(ctx context.Context, endpoint, region, accessKey, secretKey string) (*C
 		}
 	})
 
-	return &Client{s3: client, endpoint: endpoint}, nil
+	return &Client{s3: client, presigner: s3.NewPresignClient(client), endpoint: endpoint}, nil
+}
+
+// PresignedGetURL returns a time-limited download URL for a private-bucket
+// object — the tickets bucket's ONLY serving mechanism (docs/plan.md
+// storage module: "tickets: private, no CDN — a CDN defeats short-lived
+// presigned URLs"). ttl this short is deliberate: Phase 9's verification
+// specifically exercises an EXPIRED presigned URL returning 403.
+func (c *Client) PresignedGetURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
+	req, err := c.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("presign get s3://%s/%s: %w", bucket, key, err)
+	}
+	return req.URL, nil
 }
 
 // PutObject uploads body under bucket/key with the given content type and

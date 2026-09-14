@@ -7,9 +7,10 @@
 //	                             |                               -> REFUNDING -> COMPENSATED
 //	                             +-> FAILED (no money moved)
 //
-// issue_ticket is a STUB in this phase — Phase 9 builds the real QR/S3
-// path; here it only flips status to TICKETED, documented rather than
-// silently faked as complete.
+// issue_ticket calls internal/ticketing (Phase 9) when a ticketing.Service
+// is wired in; nil-safe so every existing test/caller that constructs a
+// Service without one keeps working unchanged, matching the wire-Redis-
+// availability-nil-safely pattern already used in internal/httpapi.
 package order
 
 import (
@@ -18,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +30,7 @@ import (
 	"ticketing/internal/events"
 	"ticketing/internal/inventory"
 	"ticketing/internal/payment"
+	"ticketing/internal/ticketing"
 )
 
 var (
@@ -44,14 +47,36 @@ const (
 )
 
 type Service struct {
-	pool *pgxpool.Pool
-	q    db.Querier
-	inv  *inventory.Service
-	pay  payment.Provider
+	pool    *pgxpool.Pool
+	q       db.Querier
+	inv     *inventory.Service
+	pay     payment.Provider
+	tickets *ticketing.Service // nil-safe: see package doc
 }
 
 func New(pool *pgxpool.Pool, q db.Querier, inv *inventory.Service, pay payment.Provider) *Service {
 	return &Service{pool: pool, q: q, inv: inv, pay: pay}
+}
+
+// WithTicketing wires in real QR ticket issuance — a separate setter
+// rather than a New() parameter so every existing caller (tests included)
+// keeps compiling unchanged; only cmd/server calls it.
+func (s *Service) WithTicketing(t *ticketing.Service) *Service {
+	s.tickets = t
+	return s
+}
+
+func (s *Service) issueTickets(ctx context.Context, eventID int64, orderID uuid.UUID) {
+	if s.tickets == nil {
+		return
+	}
+	if _, err := s.tickets.IssueTicketsForOrder(ctx, eventID, orderID); err != nil {
+		// Best-effort: a ticket-issuance failure must never roll back an
+		// already-TICKETED, already-paid order. GET /tickets/{id}/qr will
+		// simply 404 until a retry path exists (a real gap — see
+		// MILESTONES.md).
+		log.Printf("order: ticket issuance failed for order %s (order stays TICKETED): %v", orderID, err)
+	}
 }
 
 // CreateOrder validates the caller owns the hold, computes the total from
@@ -191,7 +216,7 @@ func (s *Service) RunSaga(ctx context.Context, orderID uuid.UUID) error {
 	if confirmErr == nil {
 		s.markStep(ctx, orderID, "confirm", "DONE", "")
 		_ = s.q.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{OrderID: orderID, Status: "CONFIRMED"})
-		// Step 4: issue_ticket — STUB. Real QR/S3 issuance is Phase 9.
+		s.issueTickets(ctx, ord.EventID, orderID)
 		s.markStep(ctx, orderID, "issue_ticket", "DONE", "")
 		_ = s.q.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{OrderID: orderID, Status: "TICKETED"})
 		return nil
@@ -221,6 +246,10 @@ func (s *Service) compensate(ctx context.Context, ord db.Order, oldHoldID uuid.U
 			_ = s.q.ReallocateOrder(ctx, db.ReallocateOrderParams{OrderID: ord.OrderID, HoldID: newHold.HoldID, SeatIds: newSeatIDs})
 			_ = s.q.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{OrderID: ord.OrderID, Status: "CONFIRMED"})
 			s.markStep(ctx, orderID, "confirm", "COMPENSATED", fmt.Sprintf("reallocated after: %v", cause))
+			// Issue against the REALLOCATED seats, not the original ones —
+			// newSeatIDs is what ListSeatIDsForOrder will actually find
+			// under this order_id now (ReallocateOrder just flipped it).
+			s.issueTickets(ctx, ord.EventID, orderID)
 			s.markStep(ctx, orderID, "issue_ticket", "DONE", "")
 			_ = s.q.UpdateOrderStatus(ctx, db.UpdateOrderStatusParams{OrderID: ord.OrderID, Status: "TICKETED"})
 			return nil

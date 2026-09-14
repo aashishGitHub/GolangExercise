@@ -71,11 +71,13 @@ type Querier interface {
 	// /holds/{id}/extend need — no separate `holds` table exists, so a hold's
 	// seats are found by hold_id alone via event_seats_hold_id_idx.
 	GetSeatsByHoldID(ctx context.Context, holdID pgtype.UUID) ([]GetSeatsByHoldIDRow, error)
+	GetTicket(ctx context.Context, ticketID uuid.UUID) (Ticket, error)
 	GetVenue(ctx context.Context, venueID int64) (Venue, error)
 	InsertDomainEvent(ctx context.Context, arg InsertDomainEventParams) error
 	InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditParams) error
 	InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error)
 	InsertRefund(ctx context.Context, arg InsertRefundParams) (Refund, error)
+	InsertTicket(ctx context.Context, arg InsertTicketParams) (Ticket, error)
 	InsertWSConnection(ctx context.Context, arg InsertWSConnectionParams) error
 	// Phase 8 (internal/waitingroom): one row per AIMD controller tick — the
 	// mechanism that lets "the loop closing on real backpressure" be plotted
@@ -109,6 +111,10 @@ type Querier interface {
 	// correctness guarantee, docs/plan.md decision #2).
 	ListExpiredHolds(ctx context.Context) ([]ListExpiredHoldsRow, error)
 	ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHoldParams) ([]int64, error)
+	// Phase 9 (internal/ticketing): one ticket per seat in a CONFIRMED/
+	// TICKETED order — event_seats.booking_id IS the order<->seat link, no
+	// separate order_items table exists.
+	ListSeatIDsForOrder(ctx context.Context, arg ListSeatIDsForOrderParams) ([]int64, error)
 	// ListSeatOrdinalsByEvent: the seat_id -> ordinal map the projector caches
 	// per event_id (in-memory, rebuilt on restart) — domain event payloads key
 	// by seat_id (the internal identity), but every wire structure (bitset,
@@ -116,6 +122,11 @@ type Querier interface {
 	ListSeatOrdinalsByEvent(ctx context.Context, eventID int64) ([]ListSeatOrdinalsByEventRow, error)
 	ListStuckOrders(ctx context.Context, arg ListStuckOrdersParams) ([]uuid.UUID, error)
 	ListStuckPayments(ctx context.Context, arg ListStuckPaymentsParams) ([]Payment, error)
+	// window_low/window_high are absolute timestamps computed in Go (now +/-
+	// the reminder lead time), not INTERVAL arithmetic in SQL — simpler typing
+	// across the sqlc boundary, and it's cmd/reminder-scheduler's own clock
+	// that should own "what does T-24h mean", not the query.
+	ListTicketsDueForReminder(ctx context.Context, arg ListTicketsDueForReminderParams) ([]ListTicketsDueForReminderRow, error)
 	// Phase 7 (internal/projector): domain events not yet applied by THIS
 	// consumer. processed_events dedup is scoped to (event_id, consumer_name)
 	// (migration 0005's comment), so the projector can replay independently of
@@ -136,8 +147,12 @@ type Querier interface {
 	ListWaitingRoomAudit(ctx context.Context, eventID int64) ([]WaitingRoomAudit, error)
 	MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error
 	MarkEventProcessed(ctx context.Context, arg MarkEventProcessedParams) error
+	MarkReminderSent(ctx context.Context, arg MarkReminderSentParams) error
 	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)
 	ReallocateOrder(ctx context.Context, arg ReallocateOrderParams) error
+	// RedeemTicket: the CAS that makes "redeem twice -> 409" work — matches
+	// rowcount 0 means already redeemed or revoked, not a separate read+check.
+	RedeemTicket(ctx context.Context, ticketID uuid.UUID) (int64, error)
 	// ReleaseHold: idempotent by construction — rowcount 0 is success (the
 	// hold was already gone), not an error.
 	ReleaseHold(ctx context.Context, arg ReleaseHoldParams) (int64, error)

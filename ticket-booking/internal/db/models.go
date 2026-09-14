@@ -133,6 +133,12 @@ type Refund struct {
 	CreatedAt   pgtype.Timestamptz `json:"createdAt"`
 }
 
+type RemindersSent struct {
+	TicketID uuid.UUID          `json:"ticketId"`
+	Kind     string             `json:"kind"`
+	SentAt   pgtype.Timestamptz `json:"sentAt"`
+}
+
 type Seat struct {
 	SeatID    int64  `json:"seatId"`
 	RowID     int64  `json:"rowId"`
@@ -155,6 +161,17 @@ type Section struct {
 	Tier         string `json:"tier"`
 	DisplayOrder int32  `json:"displayOrder"`
 	Closed       bool   `json:"closed"`
+}
+
+type Ticket struct {
+	TicketID   uuid.UUID          `json:"ticketId"`
+	OrderID    uuid.UUID          `json:"orderId"`
+	EventID    int64              `json:"eventId"`
+	SeatID     int64              `json:"seatId"`
+	QrS3Key    string             `json:"qrS3Key"`
+	RedeemedAt pgtype.Timestamptz `json:"redeemedAt"`
+	RevokedAt  pgtype.Timestamptz `json:"revokedAt"`
+	CreatedAt  pgtype.Timestamptz `json:"createdAt"`
 }
 
 type Venue struct {

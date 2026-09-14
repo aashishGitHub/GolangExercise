@@ -703,6 +703,26 @@ func (q *Queries) GetSeatsByHoldID(ctx context.Context, holdID pgtype.UUID) ([]G
 	return items, nil
 }
 
+const getTicket = `-- name: GetTicket :one
+SELECT ticket_id, order_id, event_id, seat_id, qr_s3_key, redeemed_at, revoked_at, created_at FROM tickets WHERE ticket_id = $1
+`
+
+func (q *Queries) GetTicket(ctx context.Context, ticketID uuid.UUID) (Ticket, error) {
+	row := q.db.QueryRow(ctx, getTicket, ticketID)
+	var i Ticket
+	err := row.Scan(
+		&i.TicketID,
+		&i.OrderID,
+		&i.EventID,
+		&i.SeatID,
+		&i.QrS3Key,
+		&i.RedeemedAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getVenue = `-- name: GetVenue :one
 SELECT venue_id, name, city, layout_version, created_at FROM venues WHERE venue_id = $1
 `
@@ -841,6 +861,42 @@ func (q *Queries) InsertRefund(ctx context.Context, arg InsertRefundParams) (Ref
 		&i.ProviderRef,
 		&i.AmountCents,
 		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertTicket = `-- name: InsertTicket :one
+INSERT INTO tickets (ticket_id, order_id, event_id, seat_id, qr_s3_key)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING ticket_id, order_id, event_id, seat_id, qr_s3_key, redeemed_at, revoked_at, created_at
+`
+
+type InsertTicketParams struct {
+	TicketID uuid.UUID `json:"ticketId"`
+	OrderID  uuid.UUID `json:"orderId"`
+	EventID  int64     `json:"eventId"`
+	SeatID   int64     `json:"seatId"`
+	QrS3Key  string    `json:"qrS3Key"`
+}
+
+func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) (Ticket, error) {
+	row := q.db.QueryRow(ctx, insertTicket,
+		arg.TicketID,
+		arg.OrderID,
+		arg.EventID,
+		arg.SeatID,
+		arg.QrS3Key,
+	)
+	var i Ticket
+	err := row.Scan(
+		&i.TicketID,
+		&i.OrderID,
+		&i.EventID,
+		&i.SeatID,
+		&i.QrS3Key,
+		&i.RedeemedAt,
+		&i.RevokedAt,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -1179,6 +1235,38 @@ func (q *Queries) ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHold
 	return items, nil
 }
 
+const listSeatIDsForOrder = `-- name: ListSeatIDsForOrder :many
+SELECT seat_id FROM event_seats WHERE event_id = $1 AND booking_id = $2
+`
+
+type ListSeatIDsForOrderParams struct {
+	EventID   int64       `json:"eventId"`
+	BookingID pgtype.UUID `json:"bookingId"`
+}
+
+// Phase 9 (internal/ticketing): one ticket per seat in a CONFIRMED/
+// TICKETED order — event_seats.booking_id IS the order<->seat link, no
+// separate order_items table exists.
+func (q *Queries) ListSeatIDsForOrder(ctx context.Context, arg ListSeatIDsForOrderParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listSeatIDsForOrder, arg.EventID, arg.BookingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var seat_id int64
+		if err := rows.Scan(&seat_id); err != nil {
+			return nil, err
+		}
+		items = append(items, seat_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSeatOrdinalsByEvent = `-- name: ListSeatOrdinalsByEvent :many
 SELECT seat_id, seat_ordinal FROM event_seats WHERE event_id = $1
 `
@@ -1277,6 +1365,51 @@ func (q *Queries) ListStuckPayments(ctx context.Context, arg ListStuckPaymentsPa
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTicketsDueForReminder = `-- name: ListTicketsDueForReminder :many
+SELECT t.ticket_id, t.event_id, e.starts_at
+FROM tickets t
+JOIN events e ON e.event_id = t.event_id
+WHERE t.revoked_at IS NULL
+  AND e.starts_at BETWEEN $1 AND $2
+  AND NOT EXISTS (SELECT 1 FROM reminders_sent r WHERE r.ticket_id = t.ticket_id AND r.kind = $3)
+`
+
+type ListTicketsDueForReminderParams struct {
+	WindowLow  pgtype.Timestamptz `json:"windowLow"`
+	WindowHigh pgtype.Timestamptz `json:"windowHigh"`
+	Kind       string             `json:"kind"`
+}
+
+type ListTicketsDueForReminderRow struct {
+	TicketID uuid.UUID          `json:"ticketId"`
+	EventID  int64              `json:"eventId"`
+	StartsAt pgtype.Timestamptz `json:"startsAt"`
+}
+
+// window_low/window_high are absolute timestamps computed in Go (now +/-
+// the reminder lead time), not INTERVAL arithmetic in SQL — simpler typing
+// across the sqlc boundary, and it's cmd/reminder-scheduler's own clock
+// that should own "what does T-24h mean", not the query.
+func (q *Queries) ListTicketsDueForReminder(ctx context.Context, arg ListTicketsDueForReminderParams) ([]ListTicketsDueForReminderRow, error) {
+	rows, err := q.db.Query(ctx, listTicketsDueForReminder, arg.WindowLow, arg.WindowHigh, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTicketsDueForReminderRow
+	for rows.Next() {
+		var i ListTicketsDueForReminderRow
+		if err := rows.Scan(&i.TicketID, &i.EventID, &i.StartsAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1518,6 +1651,21 @@ func (q *Queries) MarkEventProcessed(ctx context.Context, arg MarkEventProcessed
 	return err
 }
 
+const markReminderSent = `-- name: MarkReminderSent :exec
+INSERT INTO reminders_sent (ticket_id, kind) VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type MarkReminderSentParams struct {
+	TicketID uuid.UUID `json:"ticketId"`
+	Kind     string    `json:"kind"`
+}
+
+func (q *Queries) MarkReminderSent(ctx context.Context, arg MarkReminderSentParams) error {
+	_, err := q.db.Exec(ctx, markReminderSent, arg.TicketID, arg.Kind)
+	return err
+}
+
 const minEventPriceCents = `-- name: MinEventPriceCents :one
 SELECT min(price_cents)::int FROM event_price_tiers WHERE event_id = $1
 `
@@ -1544,6 +1692,21 @@ type ReallocateOrderParams struct {
 func (q *Queries) ReallocateOrder(ctx context.Context, arg ReallocateOrderParams) error {
 	_, err := q.db.Exec(ctx, reallocateOrder, arg.HoldID, arg.SeatIds, arg.OrderID)
 	return err
+}
+
+const redeemTicket = `-- name: RedeemTicket :execrows
+UPDATE tickets SET redeemed_at = now()
+WHERE ticket_id = $1 AND redeemed_at IS NULL AND revoked_at IS NULL
+`
+
+// RedeemTicket: the CAS that makes "redeem twice -> 409" work — matches
+// rowcount 0 means already redeemed or revoked, not a separate read+check.
+func (q *Queries) RedeemTicket(ctx context.Context, ticketID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, redeemTicket, ticketID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const releaseHold = `-- name: ReleaseHold :execrows

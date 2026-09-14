@@ -22,6 +22,7 @@ import (
 	"ticketing/internal/payment"
 	"ticketing/internal/projector"
 	"ticketing/internal/storage"
+	"ticketing/internal/ticketing"
 	"ticketing/internal/waitingroom"
 	"ticketing/internal/wshub"
 )
@@ -50,6 +51,9 @@ func main() {
 	pay.FailRate, pay.TimeoutRate, pay.AmbiguousRate = cfg.PaymentFailRate, cfg.PaymentTimeoutRate, cfg.PaymentAmbiguousRate
 	orders := order.New(pool, q, inv, pay)
 
+	tix := ticketing.New(q, s3, ticketing.NewHMACSigner(cfg.QRSigningSecret), cfg.S3TicketsBucket)
+	orders.WithTicketing(tix)
+
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	defer rdb.Close()
 	proj := projector.New(q, rdb)
@@ -61,7 +65,7 @@ func main() {
 
 	verifier := auth.NewVerifier(cfg.CognitoIssuerURL(), cfg.CognitoAudience)
 	hub := wshub.New(verifier, q, proj, rdb)
-	r := httpapi.NewRouter(verifier, q, inv, orders, hub, proj, wq, metrics, cfg.S3LayoutsBucket, s3.PublicURL)
+	r := httpapi.NewRouter(verifier, q, inv, orders, hub, proj, wq, metrics, tix, cfg.S3LayoutsBucket, s3.PublicURL)
 
 	log.Printf("ticketing server listening on %s (env=%s)", cfg.Addr, cfg.Env)
 	if err := http.ListenAndServe(cfg.Addr, r); err != nil {

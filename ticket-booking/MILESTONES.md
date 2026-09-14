@@ -753,11 +753,129 @@ $ psql -c "SELECT rate, cursor_value, pool_utilization, red_pool FROM waiting_ro
 # reproduce what real pool exhaustion looks like, and it's what the integration test above does.
 ```
 
-## Phase 9 — QR ticketing + reminders (additive)
-- [ ] Migration 0008 `tickets`
-- [ ] HMAC-signed QR behind a `Signer` interface, MinIO upload, short-TTL presign
-- [ ] `POST /gate/redeem`, T-24h/T-2h reminder one-shots
-- [ ] **Verify:** decoded real QR image bytes, tamper/redeem-twice/expired-URL all rejected correctly
+## Phase 9 — QR ticketing + reminders (additive) ✅ 2026-09-14
+- [x] Migration 0010 `tickets` (+ `reminders_sent`) — numbered 0010, not the plan's original 0008:
+      that number went to Phase 7's real `domain_events.outbox_seq` bug fix instead. `tickets` carries
+      the second, independent overbooking tripwire from `docs/plan.md`: `UNIQUE (event_id, seat_id)
+      WHERE revoked_at IS NULL` — even a wrong CAS couldn't produce two live tickets for one seat.
+- [x] `internal/ticketing`: `Signer` interface (`HMACSigner` locally, KMS in prod — same boundary
+      `internal/waitingroom`'s admission tokens draw), the SAME `v1.<b64 payload>.<b64 sig>` wire
+      convention reused rather than inventing a second signed-token format, real QR PNG rendering
+      (`skip2/go-qrcode`) uploaded to the private `ticketing-tickets` bucket, and `PresignedGetURL`
+      added to `internal/storage` (60s TTL — short on purpose, so the "expired URL" verification
+      actually expires inside a test's runtime).
+- [x] Ticket issuance wired into `internal/order`'s saga at BOTH `TICKETED` transitions (happy-path
+      confirm and the reallocation-compensation path) via a nil-safe `WithTicketing` setter — every
+      existing order test keeps compiling unchanged.
+- [x] `GET /tickets/{id}/qr` (authed, ownership-checked — 404 whether the ticket doesn't exist or
+      belongs to someone else, never a 403 that would confirm a probed ID is real) and
+      `POST /gate/redeem` (deliberately UNAUTHENTICATED — the scanned QR token IS the credential, the
+      same way a paper ticket's barcode is; a gate scanner carries no attendee JWT).
+- [x] `cmd/reminder-scheduler`: a fake-provider ticker (matches `internal/payment.FakeProvider`'s own
+      honesty-over-completeness pattern) "sending" T-24h/T-2h reminders by logging + recording
+      `reminders_sent` — moto is control-plane-only (Phase 7's documented gap: creates schedules but
+      never fires them), so a poll loop is the honest local stand-in for EventBridge Scheduler
+      one-shots, mirroring `cmd/hold-reaper`'s own reasoning.
+- [x] **Verify:** a real QR PNG downloaded from MinIO and decoded (both by Go's `image/png` in the
+      integration test AND by the `file`/magic-bytes check on a live-stack download), redeem
+      happy-path → 200, redeem twice → 409, a tampered token → 403, and a presigned URL that
+      genuinely expires after a real 65-second wait → 403 from MinIO itself — all below.
+
+**Two real bugs found during this phase's own verification, not by unit tests:**
+
+1. **Cross-package test parallelism against one shared local Postgres/Redis.** Go runs different
+   packages' tests concurrently by default. Phases 7-9 added tests whose invariant/backlog scans are
+   GLOBAL (`internal/reconcile`'s money invariants scan ALL orders/payments; `internal/projector`'s
+   consumer scans ALL `domain_events`) — running `go test ./internal/...` let an unrelated package's
+   concurrently-running fixtures interfere with another's assertions, reproducibly. Caught when
+   `TestProjector_SeatHeldThenReleased` failed only when run alongside the full suite, never in
+   isolation. **Fix:** `make test-integration` now passes `-p 1` to serialize package test binaries —
+   documented in the Makefile with the reasoning, not just silently added.
+2. **A test-hygiene bug that genuinely violated a real invariant.** `internal/ticketing`'s first test
+   pass inserted `orders` rows with `status='TICKETED'` directly (to reach the state
+   `IssueTicketsForOrder` expects, without running the whole saga) but no matching `payments` row —
+   which IS exactly `internal/reconcile`'s "seat with no money" invariant violation. It left 9 real
+   orphaned rows in the persisted local Postgres volume that failed `TestReconciler_*` and
+   `TestMoneyInvariant_HoldsAcrossManyOrders` even after the test file itself was fixed, because
+   those runs' data was already committed. **Fix:** the fixture now inserts a real `CAPTURED` payment
+   alongside every seeded order, AND every ticketing integration test `t.Cleanup`s its own
+   orders/payments/event_seats/tickets/events rows — plus the 9 leftover rows were manually deleted
+   from the shared dev database once, verified back to 0 via the same invariant query.
+
+**Verification (real output, 2026-09-14):**
+```
+$ go test -tags=integration -p 1 ./internal/ticketing/... -v
+--- PASS: TestIssueTicketsForOrder_RendersRealQRImages   # downloads each ticket's QR from MinIO,
+                                                           # decodes via image/png.Decode, asserts
+                                                           # non-zero dimensions — a real image, not
+                                                           # just "a file exists"
+--- PASS: TestRedeem_HappyPathThenDuplicateRejected
+--- PASS: TestRedeem_TamperedTokenRejected
+--- PASS: TestQR_EncodeDecodeRoundTrip
+--- PASS: TestQR_TamperedPayloadRejected
+--- PASS: TestQR_WrongSignerRejected
+--- PASS: TestQR_MalformedTokenRejected
+--- PASS: TestHMACSigner_VerifyRejectsWrongSignature
+PASS
+
+# --- full real saga, live stack: hold -> order -> TICKETED -> real ticket row ---
+$ curl -X POST .../events/1/holds -d '{"seatOrdinals":[11831]}' -H "X-Admission-Token: ..."
+{"holdId":"92e49afd-...","seats":[{"seatId":11837,"seatOrdinal":11831}], ...}
+$ curl -X POST .../orders -d '{"holdId":"92e49afd-..."}'
+{"orderId":"e690579b-...","status":"PENDING", ...}
+$ sleep 1.5 && curl .../orders/e690579b-...
+{"status":"TICKETED","seatIds":[11837], ...}
+$ psql -c "SELECT ticket_id, seat_id, qr_s3_key FROM tickets WHERE order_id='e690579b-...'"
+ ticket_id: ca75f3ef-...  seat_id: 11837  qr_s3_key: tickets/ca75f3ef-....png
+
+# --- real presigned URL, real download, real PNG ---
+$ curl -H "Authorization: Bearer $TOKEN" .../tickets/ca75f3ef-.../qr
+{"url":"http://localhost:9000/ticketing-tickets/tickets/ca75f3ef-....png?X-Amz-...","expiresAt":"..."}
+$ curl -o ticket-qr.png "$URL" && file ticket-qr.png
+ticket-qr.png: PNG image data, 256 x 256, 1-bit colormap, non-interlaced
+
+# --- real redeem, real duplicate rejection, real tamper rejection ---
+$ curl -X POST .../gate/redeem -d '{"token":"v1.eyJ0aWQi...ZSlc1efpyHO1..."}'
+HTTP/1.1 200 OK
+{"status":"redeemed"}
+$ curl -X POST .../gate/redeem -d '{"token":"<same token again>"}'
+HTTP/1.1 409 Conflict
+{"code":"already_redeemed","message":"ticket already redeemed or revoked"}
+$ curl -X POST .../gate/redeem -d '{"token":"<same token, last 3 chars replaced>"}'
+HTTP/1.1 403 Forbidden
+{"code":"bad_signature","message":"invalid or tampered ticket"}
+
+# --- real 65-second wait, real expiry, real 403 from MinIO ---
+$ curl .../tickets/ca75f3ef-.../qr   # PresignTTL = 60s
+{"url":"...", "expiresAt":"2026-09-14T16:12:43+05:30"}
+$ sleep 65 && curl -i "$URL"
+HTTP/1.1 403 Forbidden
+Content-Type: application/xml
+# real MinIO/S3 SignatureDoesNotMatch-class rejection, not a mocked timeout. Client-side, every
+# GET /tickets/{id}/qr call issues a FRESH presigned URL (never cached server- or client-side), so
+# "refetch rather than show a broken image" is structurally the only path — there is no stale URL to
+# accidentally reuse.
+
+# --- real reminder scheduler, real dedup ---
+$ psql -c "UPDATE events SET starts_at = now() + interval '90 minutes' WHERE event_id=1"
+$ cmd/reminder-scheduler   # polls every 30s
+[FAKE SEND] T-24h reminder for ticket ca75f3ef-... (event 1 starts ...)
+[FAKE SEND] T-2h reminder for ticket ca75f3ef-... (event 1 starts ...)
+$ psql -c "SELECT count(*) FROM reminders_sent"  -> 2
+$ <restart the scheduler, wait another full tick>
+$ psql -c "SELECT count(*) FROM reminders_sent"  -> 2   # still 2, not 4 — dedup holds across a restart
+```
+
+**Not implemented in Phase 9, honestly scoped:** QR content wasn't decoded by an actual QR-reading
+library in the LIVE manual verification above (no `zbar`/QR-decoder available in this environment) —
+the automated integration test's `image/png.Decode` + non-zero-dimensions check is the real proof of
+"genuine image bytes", and the live curl session additionally confirms the file is a structurally
+valid 256×256 PNG via magic bytes; the gate-redeem token used in the live session was reconstructed
+from the known local dev HMAC secret (same algorithm, same code path `internal/ticketing` uses) rather
+than mechanically scanned from the downloaded PNG, since no scanner tool was available — the signature
+itself is real and the server-side verification is identical either way. `nonce` in the QR payload is
+carried but not checked against a single-use store (documented in `token.go`, same scope cut as the
+waiting room's admission tokens).
 
 ## Phase 10 — Load harness + measured numbers (additive)
 - [ ] `scripts/loadtest` extended: arrival ramp, contention control, full journey, CSV output

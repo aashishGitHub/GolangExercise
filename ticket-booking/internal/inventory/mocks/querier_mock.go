@@ -414,6 +414,21 @@ func (mr *MockQuerierMockRecorder) GetSeatsByHoldID(ctx, holdID any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSeatsByHoldID", reflect.TypeOf((*MockQuerier)(nil).GetSeatsByHoldID), ctx, holdID)
 }
 
+// GetTicket mocks base method.
+func (m *MockQuerier) GetTicket(ctx context.Context, ticketID uuid.UUID) (db.Ticket, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTicket", ctx, ticketID)
+	ret0, _ := ret[0].(db.Ticket)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetTicket indicates an expected call of GetTicket.
+func (mr *MockQuerierMockRecorder) GetTicket(ctx, ticketID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTicket", reflect.TypeOf((*MockQuerier)(nil).GetTicket), ctx, ticketID)
+}
+
 // GetVenue mocks base method.
 func (m *MockQuerier) GetVenue(ctx context.Context, venueID int64) (db.Venue, error) {
 	m.ctrl.T.Helper()
@@ -485,6 +500,21 @@ func (m *MockQuerier) InsertRefund(ctx context.Context, arg db.InsertRefundParam
 func (mr *MockQuerierMockRecorder) InsertRefund(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertRefund", reflect.TypeOf((*MockQuerier)(nil).InsertRefund), ctx, arg)
+}
+
+// InsertTicket mocks base method.
+func (m *MockQuerier) InsertTicket(ctx context.Context, arg db.InsertTicketParams) (db.Ticket, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertTicket", ctx, arg)
+	ret0, _ := ret[0].(db.Ticket)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// InsertTicket indicates an expected call of InsertTicket.
+func (mr *MockQuerierMockRecorder) InsertTicket(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertTicket", reflect.TypeOf((*MockQuerier)(nil).InsertTicket), ctx, arg)
 }
 
 // InsertWSConnection mocks base method.
@@ -635,6 +665,21 @@ func (mr *MockQuerierMockRecorder) ListSeatIDsForHold(ctx, arg any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSeatIDsForHold", reflect.TypeOf((*MockQuerier)(nil).ListSeatIDsForHold), ctx, arg)
 }
 
+// ListSeatIDsForOrder mocks base method.
+func (m *MockQuerier) ListSeatIDsForOrder(ctx context.Context, arg db.ListSeatIDsForOrderParams) ([]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSeatIDsForOrder", ctx, arg)
+	ret0, _ := ret[0].([]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSeatIDsForOrder indicates an expected call of ListSeatIDsForOrder.
+func (mr *MockQuerierMockRecorder) ListSeatIDsForOrder(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSeatIDsForOrder", reflect.TypeOf((*MockQuerier)(nil).ListSeatIDsForOrder), ctx, arg)
+}
+
 // ListSeatOrdinalsByEvent mocks base method.
 func (m *MockQuerier) ListSeatOrdinalsByEvent(ctx context.Context, eventID int64) ([]db.ListSeatOrdinalsByEventRow, error) {
 	m.ctrl.T.Helper()
@@ -678,6 +723,21 @@ func (m *MockQuerier) ListStuckPayments(ctx context.Context, arg db.ListStuckPay
 func (mr *MockQuerierMockRecorder) ListStuckPayments(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStuckPayments", reflect.TypeOf((*MockQuerier)(nil).ListStuckPayments), ctx, arg)
+}
+
+// ListTicketsDueForReminder mocks base method.
+func (m *MockQuerier) ListTicketsDueForReminder(ctx context.Context, arg db.ListTicketsDueForReminderParams) ([]db.ListTicketsDueForReminderRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListTicketsDueForReminder", ctx, arg)
+	ret0, _ := ret[0].([]db.ListTicketsDueForReminderRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListTicketsDueForReminder indicates an expected call of ListTicketsDueForReminder.
+func (mr *MockQuerierMockRecorder) ListTicketsDueForReminder(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListTicketsDueForReminder", reflect.TypeOf((*MockQuerier)(nil).ListTicketsDueForReminder), ctx, arg)
 }
 
 // ListUnprocessedDomainEvents mocks base method.
@@ -768,6 +828,20 @@ func (mr *MockQuerierMockRecorder) MarkEventProcessed(ctx, arg any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkEventProcessed", reflect.TypeOf((*MockQuerier)(nil).MarkEventProcessed), ctx, arg)
 }
 
+// MarkReminderSent mocks base method.
+func (m *MockQuerier) MarkReminderSent(ctx context.Context, arg db.MarkReminderSentParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkReminderSent", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkReminderSent indicates an expected call of MarkReminderSent.
+func (mr *MockQuerierMockRecorder) MarkReminderSent(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkReminderSent", reflect.TypeOf((*MockQuerier)(nil).MarkReminderSent), ctx, arg)
+}
+
 // MinEventPriceCents mocks base method.
 func (m *MockQuerier) MinEventPriceCents(ctx context.Context, eventID int64) (int32, error) {
 	m.ctrl.T.Helper()
@@ -795,6 +869,21 @@ func (m *MockQuerier) ReallocateOrder(ctx context.Context, arg db.ReallocateOrde
 func (mr *MockQuerierMockRecorder) ReallocateOrder(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReallocateOrder", reflect.TypeOf((*MockQuerier)(nil).ReallocateOrder), ctx, arg)
+}
+
+// RedeemTicket mocks base method.
+func (m *MockQuerier) RedeemTicket(ctx context.Context, ticketID uuid.UUID) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RedeemTicket", ctx, ticketID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RedeemTicket indicates an expected call of RedeemTicket.
+func (mr *MockQuerierMockRecorder) RedeemTicket(ctx, ticketID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RedeemTicket", reflect.TypeOf((*MockQuerier)(nil).RedeemTicket), ctx, ticketID)
 }
 
 // ReleaseHold mocks base method.
