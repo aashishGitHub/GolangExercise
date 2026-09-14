@@ -99,12 +99,53 @@ $ docker compose down
 [all 5 containers + network removed cleanly]
 ```
 
-## Phase 1 — Auth
-- [ ] `internal/auth`: JWKS fetch, RS256 verify, iss/aud/`token_use=id` checks (port from
-      `offline-sync-app/internal/auth`)
-- [ ] `scripts/seed-cognito-local.sh` (idempotent, port from the sibling)
-- [ ] `GET /api/v1/whoami`
-- [ ] 5 unit tests: valid / missing / expired / wrong-aud / wrong-token_use
+## Phase 1 — Auth ✅ 2026-09-14
+- [x] `internal/auth`: JWKS fetch, RS256 verify, iss/aud/`token_use=id` checks (ported verbatim from
+      `offline-sync-app/internal/auth` — the package is generic, no FieldSync-specific naming)
+- [x] `scripts/seed-cognito-local.sh` (idempotent, ported from the sibling with names swapped)
+- [x] `GET /api/v1/whoami`, mounted under an `/api/v1` group wrapped by `verifier.Middleware`
+- [x] 5 unit tests: valid / missing / expired / wrong-aud / wrong-token_use — all pass, against a
+      self-signed test JWKS server (not cognito-local — unit tests don't depend on Docker)
+
+**Verification (real output, 2026-09-14):**
+```
+$ go test ./internal/auth/... -v
+--- PASS: TestMiddleware_ValidToken (0.08s)
+--- PASS: TestMiddleware_MissingToken (0.08s)
+--- PASS: TestMiddleware_ExpiredToken (0.03s)
+--- PASS: TestMiddleware_WrongAudience (0.01s)
+--- PASS: TestMiddleware_WrongTokenUse (0.05s)
+PASS
+
+$ docker compose up -d && ./scripts/seed-cognito-local.sh
+Created user pool: local_5rBK5fNU
+Created app client: 33l5kpkcx5pjp7s55ubre9psc
+
+$ aws --endpoint-url http://localhost:9229 cognito-idp sign-up --client-id ... \
+    --username interviewer@example.com --password 'TestPass123!' \
+    --user-attributes Name=email,Value=interviewer@example.com
+{"UserConfirmed": false, "UserSub": "98eff5e8-bf84-4c3e-ac1b-82fa69a7725e"}
+
+$ aws --endpoint-url http://localhost:9229 cognito-idp confirm-sign-up --client-id ... \
+    --username interviewer@example.com --confirmation-code 123456
+(empty — success)
+
+$ aws --endpoint-url http://localhost:9229 cognito-idp initiate-auth --client-id ... \
+    --auth-flow USER_PASSWORD_AUTH \
+    --auth-parameters USERNAME=interviewer@example.com,PASSWORD='TestPass123!'
+{"ChallengeName": "PASSWORD_VERIFIER", "AuthenticationResult": {"AccessToken": "eyJ...", "IdToken": "eyJ..."}}
+
+$ go run ./cmd/server &
+$ curl -s -H "Authorization: Bearer $IDTOKEN" localhost:8080/api/v1/whoami
+{"email":"interviewer@example.com","sub":"98eff5e8-bf84-4c3e-ac1b-82fa69a7725e"}
+
+$ curl -s -o /dev/null -w "%{http_code}\n" localhost:8080/api/v1/whoami          # no header
+401
+$ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer ${IDTOKEN}x" localhost:8080/api/v1/whoami  # tampered
+401
+$ curl -s localhost:8080/health                                                  # still open, unauthenticated
+{"status":"ok"}
+```
 
 ## Phase 2 — Catalog + seat-map read path
 - [ ] Migrations 0001 (venue layout) + 0002 (`event_seats`, with `sellable`)

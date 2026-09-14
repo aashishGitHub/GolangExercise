@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 
+	"ticketing/internal/auth"
 	"ticketing/internal/config"
 	"ticketing/internal/httpapi"
 )
@@ -14,7 +15,8 @@ import (
 func main() {
 	cfg := config.Load()
 
-	r := httpapi.NewRouter()
+	verifier := auth.NewVerifier(cfg.CognitoIssuerURL(), cfg.CognitoAudience)
+	r := httpapi.NewRouter(verifier)
 
 	log.Printf("ticketing server listening on %s (env=%s)", cfg.Addr, cfg.Env)
 	if err := http.ListenAndServe(cfg.Addr, r); err != nil {
