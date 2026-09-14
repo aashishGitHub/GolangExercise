@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"ticketing/internal/auth"
 	"ticketing/internal/config"
@@ -19,7 +20,9 @@ import (
 	"ticketing/internal/inventory"
 	"ticketing/internal/order"
 	"ticketing/internal/payment"
+	"ticketing/internal/projector"
 	"ticketing/internal/storage"
+	"ticketing/internal/wshub"
 )
 
 func main() {
@@ -46,8 +49,13 @@ func main() {
 	pay.FailRate, pay.TimeoutRate, pay.AmbiguousRate = cfg.PaymentFailRate, cfg.PaymentTimeoutRate, cfg.PaymentAmbiguousRate
 	orders := order.New(pool, q, inv, pay)
 
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+	defer rdb.Close()
+	proj := projector.New(q, rdb)
+
 	verifier := auth.NewVerifier(cfg.CognitoIssuerURL(), cfg.CognitoAudience)
-	r := httpapi.NewRouter(verifier, q, inv, orders, cfg.S3LayoutsBucket, s3.PublicURL)
+	hub := wshub.New(verifier, q, proj, rdb)
+	r := httpapi.NewRouter(verifier, q, inv, orders, hub, proj, cfg.S3LayoutsBucket, s3.PublicURL)
 
 	log.Printf("ticketing server listening on %s (env=%s)", cfg.Addr, cfg.Env)
 	if err := http.ListenAndServe(cfg.Addr, r); err != nil {

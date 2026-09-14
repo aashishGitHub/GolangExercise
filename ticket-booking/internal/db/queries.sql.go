@@ -85,6 +85,15 @@ type BulkInsertEventSeatsParams struct {
 	PriceCents  int32 `json:"priceCents"`
 }
 
+const closeWSConnection = `-- name: CloseWSConnection :exec
+UPDATE ws_connections SET disconnected_at = now() WHERE connection_id = $1
+`
+
+func (q *Queries) CloseWSConnection(ctx context.Context, connectionID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, closeWSConnection, connectionID)
+	return err
+}
+
 const confirmSeats = `-- name: ConfirmSeats :execrows
 UPDATE event_seats es
    SET status = 2, booking_id = $1, hold_id = NULL,
@@ -837,6 +846,22 @@ func (q *Queries) InsertRefund(ctx context.Context, arg InsertRefundParams) (Ref
 	return i, err
 }
 
+const insertWSConnection = `-- name: InsertWSConnection :exec
+INSERT INTO ws_connections (connection_id, event_id, user_sub)
+VALUES ($1, $2, $3)
+`
+
+type InsertWSConnectionParams struct {
+	ConnectionID uuid.UUID `json:"connectionId"`
+	EventID      int64     `json:"eventId"`
+	UserSub      string    `json:"userSub"`
+}
+
+func (q *Queries) InsertWSConnection(ctx context.Context, arg InsertWSConnectionParams) error {
+	_, err := q.db.Exec(ctx, insertWSConnection, arg.ConnectionID, arg.EventID, arg.UserSub)
+	return err
+}
+
 const listAvailableForBestAvailable = `-- name: ListAvailableForBestAvailable :many
 SELECT es.seat_id, es.seat_ordinal, st.row_id
 FROM event_seats es
@@ -1087,6 +1112,39 @@ func (q *Queries) ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHold
 	return items, nil
 }
 
+const listSeatOrdinalsByEvent = `-- name: ListSeatOrdinalsByEvent :many
+SELECT seat_id, seat_ordinal FROM event_seats WHERE event_id = $1
+`
+
+type ListSeatOrdinalsByEventRow struct {
+	SeatID      int64 `json:"seatId"`
+	SeatOrdinal int32 `json:"seatOrdinal"`
+}
+
+// ListSeatOrdinalsByEvent: the seat_id -> ordinal map the projector caches
+// per event_id (in-memory, rebuilt on restart) — domain event payloads key
+// by seat_id (the internal identity), but every wire structure (bitset,
+// deltas) is ordinal-indexed (docs/plan.md decision #5).
+func (q *Queries) ListSeatOrdinalsByEvent(ctx context.Context, eventID int64) ([]ListSeatOrdinalsByEventRow, error) {
+	rows, err := q.db.Query(ctx, listSeatOrdinalsByEvent, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSeatOrdinalsByEventRow
+	for rows.Next() {
+		var i ListSeatOrdinalsByEventRow
+		if err := rows.Scan(&i.SeatID, &i.SeatOrdinal); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStuckOrders = `-- name: ListStuckOrders :many
 SELECT order_id FROM orders
 WHERE status IN ('PENDING', 'AUTHORIZING', 'CONFIRMING') AND updated_at < now() - make_interval(secs => $1::int)
@@ -1162,11 +1220,73 @@ func (q *Queries) ListStuckPayments(ctx context.Context, arg ListStuckPaymentsPa
 	return items, nil
 }
 
+const listUnprocessedDomainEvents = `-- name: ListUnprocessedDomainEvents :many
+SELECT de.event_id, de.aggregate_id, de.event_type, de.schema_version, de.payload, de.created_at
+FROM domain_events de
+WHERE de.event_type IN ('seat.held', 'seat.released', 'seat.booked')
+  AND NOT EXISTS (
+    SELECT 1 FROM processed_events pe
+    WHERE pe.event_id = de.event_id AND pe.consumer_name = $1
+  )
+ORDER BY de.outbox_seq
+LIMIT $2
+`
+
+type ListUnprocessedDomainEventsParams struct {
+	ConsumerName string `json:"consumerName"`
+	RowLimit     int32  `json:"rowLimit"`
+}
+
+type ListUnprocessedDomainEventsRow struct {
+	EventID       uuid.UUID          `json:"eventId"`
+	AggregateID   string             `json:"aggregateId"`
+	EventType     string             `json:"eventType"`
+	SchemaVersion int32              `json:"schemaVersion"`
+	Payload       []byte             `json:"payload"`
+	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
+}
+
+// Phase 7 (internal/projector): domain events not yet applied by THIS
+// consumer. processed_events dedup is scoped to (event_id, consumer_name)
+// (migration 0005's comment), so the projector can replay independently of
+// the EventBridge outbox relay — a crash mid-batch just re-applies from the
+// same point, and the bitset write is itself idempotent (see projector.go).
+// outbox_seq, NOT created_at (migration 0008): created_at alone is not a
+// strict total order under rapid sequential inserts, and this consumer's
+// correctness genuinely depends on applying transitions in real order —
+// unlike the outbox relay, which doesn't care about delivery order.
+func (q *Queries) ListUnprocessedDomainEvents(ctx context.Context, arg ListUnprocessedDomainEventsParams) ([]ListUnprocessedDomainEventsRow, error) {
+	rows, err := q.db.Query(ctx, listUnprocessedDomainEvents, arg.ConsumerName, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnprocessedDomainEventsRow
+	for rows.Next() {
+		var i ListUnprocessedDomainEventsRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.AggregateID,
+			&i.EventType,
+			&i.SchemaVersion,
+			&i.Payload,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnpublishedDomainEvents = `-- name: ListUnpublishedDomainEvents :many
 SELECT event_id, aggregate_id, event_type, schema_version, payload
 FROM domain_events
 WHERE published_at IS NULL
-ORDER BY created_at
+ORDER BY outbox_seq
 LIMIT $1
 `
 
@@ -1276,6 +1396,22 @@ UPDATE domain_events SET published_at = now() WHERE event_id = $1
 
 func (q *Queries) MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markDomainEventPublished, eventID)
+	return err
+}
+
+const markEventProcessed = `-- name: MarkEventProcessed :exec
+INSERT INTO processed_events (event_id, consumer_name)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type MarkEventProcessedParams struct {
+	EventID      uuid.UUID `json:"eventId"`
+	ConsumerName string    `json:"consumerName"`
+}
+
+func (q *Queries) MarkEventProcessed(ctx context.Context, arg MarkEventProcessedParams) error {
+	_, err := q.db.Exec(ctx, markEventProcessed, arg.EventID, arg.ConsumerName)
 	return err
 }
 
@@ -1397,5 +1533,19 @@ func (q *Queries) UpdateSagaStep(ctx context.Context, arg UpdateSagaStepParams) 
 		arg.OrderID,
 		arg.Step,
 	)
+	return err
+}
+
+const updateWSConnectionSeq = `-- name: UpdateWSConnectionSeq :exec
+UPDATE ws_connections SET last_seq_sent = $1 WHERE connection_id = $2
+`
+
+type UpdateWSConnectionSeqParams struct {
+	LastSeqSent  int64     `json:"lastSeqSent"`
+	ConnectionID uuid.UUID `json:"connectionId"`
+}
+
+func (q *Queries) UpdateWSConnectionSeq(ctx context.Context, arg UpdateWSConnectionSeqParams) error {
+	_, err := q.db.Exec(ctx, updateWSConnectionSeq, arg.LastSeqSent, arg.ConnectionID)
 	return err
 }

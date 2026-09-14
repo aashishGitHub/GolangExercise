@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"ticketing/internal/db"
+	"ticketing/internal/projector"
 	"ticketing/internal/seatmap"
 )
 
@@ -19,6 +21,7 @@ import (
 // the API, not browsing the static seat map assets" (router.go).
 type catalogAPI struct {
 	q             db.Querier
+	proj          *projector.Projector // nil-safe: getAvailability falls back to the Phase 2 DB scan if nil or if Redis errors
 	layoutsBucket string
 	publicURL     func(bucket, key string) string
 }
@@ -142,14 +145,26 @@ func (c *catalogAPI) getVenueLayout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, c.publicURL(c.layoutsBucket, key), http.StatusFound)
 }
 
-// getAvailability is the Phase 2 DB-scan path — Index Only Scan on
-// event_seats_cover_idx. Superseded by the Redis-backed projector in
-// Phase 7; this stays as the cold/down fallback.
+// getAvailability reads Redis (internal/projector's bitset) first, with a
+// DB-scan fallback (Index Only Scan on event_seats_cover_idx) — the Phase 7
+// upgrade of the Phase 2 read path. The fallback fires both when c.proj is
+// nil (a caller that never wired one, e.g. a future minimal test harness)
+// and when Redis errors at request time — "Postgres unreachable" is the
+// system's one deliberate fail-closed 503 (docs/plan.md's status-code
+// semantics); Redis unreachable on a READ path is not that case, since
+// event_seats remains the arbiter regardless of which path served this GET.
 func (c *catalogAPI) getAvailability(w http.ResponseWriter, r *http.Request) {
 	eventID, err := strconv.ParseInt(chi.URLParam(r, "eventID"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_id", "eventID must be an integer")
 		return
+	}
+
+	if c.proj != nil {
+		if packed, seq, seatCount, ok := c.tryRedisAvailability(r.Context(), eventID); ok {
+			c.writeAvailability(w, r, packed, seatCount, &seq)
+			return
+		}
 	}
 
 	rows, err := c.q.ListEventSeatsForAvailability(r.Context(), eventID)
@@ -167,7 +182,29 @@ func (c *catalogAPI) getAvailability(w http.ResponseWriter, r *http.Request) {
 		// ORDER BY seat_ordinal in the query means row i IS ordinal i.
 		seatmap.Set(packed, int(row.SeatOrdinal), seatmap.StateFromDB(row.Status, row.Sellable))
 	}
+	c.writeAvailability(w, r, packed, len(rows), nil)
+}
 
+// tryRedisAvailability returns ok=false on ANY Redis error (unreachable,
+// timeout, whatever) so the caller falls through to Postgres — this is the
+// one place "Redis is down" degrades a read, never a write (docs/plan.md
+// decision #1: Redis is a cache/filter, never the arbiter).
+func (c *catalogAPI) tryRedisAvailability(ctx context.Context, eventID int64) (packed []byte, seq uint64, seatCount int, ok bool) {
+	packed, seq, err := c.proj.EnsureBitset(ctx, eventID)
+	if err != nil {
+		return nil, 0, 0, false
+	}
+	seatCount, err = c.proj.SeatCount(ctx, eventID)
+	if err != nil {
+		return nil, 0, 0, false
+	}
+	if seatCount == 0 {
+		return nil, 0, 0, false // no seats for this event — let the DB path produce the correct 404
+	}
+	return packed, seq, seatCount, true
+}
+
+func (c *catalogAPI) writeAvailability(w http.ResponseWriter, r *http.Request, packed []byte, seatCount int, seq *uint64) {
 	etag := `"` + sha256hex(packed) + `"`
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
@@ -175,10 +212,13 @@ func (c *catalogAPI) getAvailability(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("X-Seat-Count", strconv.Itoa(len(rows)))
-	// X-Seatmap-Version: a real monotonic seq is Phase 7's projector's job
-	// (Redis INCR per event); the DB-scan path has no cheap equivalent, so
-	// it's omitted here rather than faked — absence, not a wrong value.
+	w.Header().Set("X-Seat-Count", strconv.Itoa(seatCount))
+	if seq != nil {
+		// Only present on the Redis path — the DB-scan fallback has no
+		// cheap monotonic counter to offer, so it's omitted rather than
+		// faked (absence, not a wrong value).
+		w.Header().Set("X-Seatmap-Version", strconv.FormatUint(*seq, 10))
+	}
 	w.Header().Set("ETag", etag)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(packed)

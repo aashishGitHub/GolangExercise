@@ -15,6 +15,8 @@ import (
 	"ticketing/internal/db"
 	"ticketing/internal/inventory"
 	"ticketing/internal/order"
+	"ticketing/internal/projector"
+	"ticketing/internal/wshub"
 )
 
 // NewRouter builds the full route tree. /health and the catalog/
@@ -22,7 +24,7 @@ import (
 // (whoami, holds) are wrapped by the auth verifier — "auth gates the API,
 // not browsing the static seat map assets", mirroring the sibling's "auth
 // gates sync, not capture" split.
-func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
+func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, orders *order.Service, hub *wshub.Hub, proj *projector.Projector, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -40,8 +42,12 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, or
 	}))
 
 	r.Get("/health", handleHealth)
+	// Outside /api/v1 deliberately: this is not a REST resource, and a
+	// real API Gateway WebSocket API is a completely separate endpoint
+	// from the HTTP API in front of everything else here.
+	r.Get("/ws", hub.ServeWS)
 
-	cat := &catalogAPI{q: q, layoutsBucket: layoutsBucket, publicURL: publicURL}
+	cat := &catalogAPI{q: q, proj: proj, layoutsBucket: layoutsBucket, publicURL: publicURL}
 	holds := &holdsAPI{inv: inv, q: q}
 	ord := &ordersAPI{orders: orders, q: q}
 

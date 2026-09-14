@@ -276,7 +276,7 @@ VALUES (sqlc.arg(event_id), sqlc.arg(aggregate_id), sqlc.arg(event_type), sqlc.a
 SELECT event_id, aggregate_id, event_type, schema_version, payload
 FROM domain_events
 WHERE published_at IS NULL
-ORDER BY created_at
+ORDER BY outbox_seq
 LIMIT sqlc.arg(row_limit);
 
 -- name: MarkDomainEventPublished :exec
@@ -305,3 +305,45 @@ JOIN seats st ON st.seat_id = es.seat_id
 WHERE es.event_id = sqlc.arg(event_id) AND es.status = 0 AND es.sellable
   AND es.price_cents <= sqlc.arg(max_price_cents)
 ORDER BY es.seat_ordinal;
+
+-- Phase 7 (internal/projector): domain events not yet applied by THIS
+-- consumer. processed_events dedup is scoped to (event_id, consumer_name)
+-- (migration 0005's comment), so the projector can replay independently of
+-- the EventBridge outbox relay — a crash mid-batch just re-applies from the
+-- same point, and the bitset write is itself idempotent (see projector.go).
+-- name: ListUnprocessedDomainEvents :many
+SELECT de.event_id, de.aggregate_id, de.event_type, de.schema_version, de.payload, de.created_at
+FROM domain_events de
+WHERE de.event_type IN ('seat.held', 'seat.released', 'seat.booked')
+  AND NOT EXISTS (
+    SELECT 1 FROM processed_events pe
+    WHERE pe.event_id = de.event_id AND pe.consumer_name = sqlc.arg(consumer_name)
+  )
+-- outbox_seq, NOT created_at (migration 0008): created_at alone is not a
+-- strict total order under rapid sequential inserts, and this consumer's
+-- correctness genuinely depends on applying transitions in real order —
+-- unlike the outbox relay, which doesn't care about delivery order.
+ORDER BY de.outbox_seq
+LIMIT sqlc.arg(row_limit);
+
+-- name: MarkEventProcessed :exec
+INSERT INTO processed_events (event_id, consumer_name)
+VALUES (sqlc.arg(event_id), sqlc.arg(consumer_name))
+ON CONFLICT DO NOTHING;
+
+-- ListSeatOrdinalsByEvent: the seat_id -> ordinal map the projector caches
+-- per event_id (in-memory, rebuilt on restart) — domain event payloads key
+-- by seat_id (the internal identity), but every wire structure (bitset,
+-- deltas) is ordinal-indexed (docs/plan.md decision #5).
+-- name: ListSeatOrdinalsByEvent :many
+SELECT seat_id, seat_ordinal FROM event_seats WHERE event_id = sqlc.arg(event_id);
+
+-- name: InsertWSConnection :exec
+INSERT INTO ws_connections (connection_id, event_id, user_sub)
+VALUES (sqlc.arg(connection_id), sqlc.arg(event_id), sqlc.arg(user_sub));
+
+-- name: UpdateWSConnectionSeq :exec
+UPDATE ws_connections SET last_seq_sent = sqlc.arg(last_seq_sent) WHERE connection_id = sqlc.arg(connection_id);
+
+-- name: CloseWSConnection :exec
+UPDATE ws_connections SET disconnected_at = now() WHERE connection_id = sqlc.arg(connection_id);
