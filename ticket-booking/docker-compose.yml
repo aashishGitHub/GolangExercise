@@ -1,0 +1,106 @@
+name: ticketing
+
+# Local-AWS emulator patchwork, mirroring offline-sync-app's proven stack
+# (see ticket-booking/docs/plan.md "Local stack"). LocalStack is deliberately
+# NOT used here: its free image refuses to boot without LOCALSTACK_AUTH_TOKEN
+# (confirmed via container logs in the sibling project's Phase 3).
+
+services:
+  # The seat-state arbiter (event_seats CAS) plus orders/payments/outbox.
+  # Aurora Postgres 16.x is the prod target, so the major version must match.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ticketing
+      POSTGRES_PASSWORD: ticketing
+      POSTGRES_DB: ticketing
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ticketing"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Three jobs, never the arbiter: SET NX PX hold fast-path, the availability
+  # bitset read cache, and the waiting-room ZSET. noeviction/no-AOF mirrors
+  # the prod ElastiCache config (see plan.md "cache" module) — a node
+  # recovering a stale bitset from disk would be worse than an empty one.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Cognito stand-in. Pinned exactly: >=4.0.0 for the .well-known endpoints,
+  # and the port must stay 9229 — this image hardcodes it into the issuer/
+  # JWKS URLs it returns.
+  cognito-local:
+    image: jagregory/cognito-local:4.0.0
+    environment:
+      CODE: "123456"
+    ports:
+      - "9229:9229"
+    volumes:
+      - cognito-local-data:/app/.cognito
+
+  # S3 stand-in. Pin the RELEASE tag, not `latest` — recent MinIO releases
+  # removed most of the web console. Real finding while scaffolding this:
+  # Docker Hub's minio/minio now access-denies anonymous pulls of pinned
+  # RELEASE tags entirely (MinIO restricted historical tags there in 2024) —
+  # `quay.io/minio/minio` mirrors the same tags and pulls anonymously.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: localdevuser
+      MINIO_ROOT_PASSWORD: localdevpassword
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot bucket + cache-header seeding. `restart: "no"` — it should run
+  # once per `compose up` and exit 0, not loop.
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2024-10-08T09-37-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 localdevuser localdevpassword &&
+      mc mb -p local/ticketing-layouts local/ticketing-tickets local/ticketing-web &&
+      mc anonymous set download local/ticketing-layouts &&
+      mc admin config set local api requests_max=0 || true &&
+      echo minio-init done
+      "
+
+  # EventBridge/SQS/Scheduler control plane. moto is control-plane only — it
+  # never delivers an event or fires a schedule (see plan.md fidelity gaps).
+  # Host port 5001, not 5000 — 5000 collides with macOS AirPlay Receiver.
+  moto-server:
+    image: motoserver/moto:latest
+    environment:
+      MOTO_PORT: "5000"
+    ports:
+      - "5001:5000"
+
+volumes:
+  postgres-data:
+  cognito-local-data:
+  minio-data:

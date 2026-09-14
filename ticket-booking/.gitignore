@@ -1,0 +1,15 @@
+.env
+.env.local
+
+/web/node_modules/
+/web/dist/
+/web/dev-dist/
+
+# terraform lambda build artifacts — rebuilt by `make build-lambda`
+infra/terraform/modules/*/build/
+
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+# .terraform.lock.hcl is intentionally NOT ignored — committed like the sibling project
