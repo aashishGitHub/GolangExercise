@@ -657,10 +657,101 @@ polls `/availability` — wiring the browser to `/ws` is real future work, not d
 10-minute idle-timeout wall-clock test (verified by code review + the ping/pong wiring, not by
 actually waiting 10 minutes in CI).
 
-## Phase 8 — Virtual waiting room + AIMD
-- [ ] `internal/waitingroom`, queue routes, `X-Admission-Token` middleware, AIMD controller
-- [ ] Migration 0009 `waiting_room_audit`
-- [ ] **Verify:** 5,000 arrivals/1s, AIMD rate halving under clamped pool, token tamper/replay rejected
+## Phase 8 — Virtual waiting room + AIMD ✅ 2026-09-14
+- [x] `internal/waitingroom`: `Queue` (arrival ZSET + cursor + rate, all Redis, hash-tagged per event),
+      `Controller` (the AIMD loop), `HoldMetrics` (a ring-buffer p99/error-rate recorder), and
+      `RequireAdmission` (the `X-Admission-Token` middleware).
+- [x] `POST /events/{id}/queue` (join; 202 while queued, 200 + token once admitted) and
+      `X-Admission-Token` gating `POST .../holds` specifically — GET/DELETE/extend act on a hold the
+      caller already legitimately owns, so re-checking admission there would protect nothing.
+- [x] Admission tokens: `v1.<b64 payload>.<b64 HMAC-SHA256>` over `{sub,eid,pos,iat,exp,nonce}`,
+      constant-time-compared (`hmac.Equal`), bound to the Cognito `sub` — a stolen/shared token
+      verifies against the WRONG sub and is rejected exactly like a forged one.
+- [x] Migration 0009 `waiting_room_audit` — every AIMD tick appends one row (rate, cursor, p99, pool
+      utilization, error rate, and which of the three inputs were red), so the control loop's real
+      behavior is plotted, not asserted.
+- [x] The AIMD loop runs IN `cmd/server` (not a separate `cmd/*` binary) — deliberately: the
+      pool-utilization and hold-latency signals only mean something coming from the process actually
+      serving hold requests. Documented as a real gap for a multi-replica deployment (needs a shared
+      metrics backend, e.g. CloudWatch, not a single process's local counters), not fixed here.
+- [x] **Verify:** 5,000 distinct concurrent arrivals well under 1s, `POST /holds` without a token
+      rejected 403, a valid token admits, a tampered token rejected 403, another user replaying a
+      real token rejected 403 (sub mismatch), and the AIMD rate provably halving within 3 ticks under
+      a genuinely saturated pgx pool — all against real Redis/Postgres, output below.
+
+**A real methodology mistake caught before it became a wrong conclusion:** the first "5,000 arrivals"
+attempt drove `POST /events/1/queue` through 5,000 concurrent curls sharing ONE real cognito-local JWT
+— `ZADD NX` correctly treated all 5,000 as the SAME arrival (one sub, one queue slot; `ZCARD` came back
+`1`), which is right queue behavior but proves nothing about scale. Fixed by exercising
+`waitingroom.Queue.Join` directly with 5,000 DISTINCT synthetic subs (`scripts/queue-loadtest`) —
+deliberately bypassing HTTP+auth, which is proven elsewhere (Phase 1), so the number measures the
+queue mechanism itself, not JWT verification throughput.
+
+**Verification (real output, 2026-09-14):**
+```
+$ go test -tags=integration ./internal/waitingroom/... -v
+--- PASS: TestQueue_JoinBeforeCursorStaysQueued
+--- PASS: TestQueue_AdmittedOnceCursorPassesRank
+--- PASS: TestQueue_RejoinKeepsOriginalPlaceInLine        # ZADD NX: a refresh never cuts the line
+--- PASS: TestController_AllGreenIncreasesRate
+--- PASS: TestController_ClampedPoolTriggersRateHalvingWithinThreeTicks
+    AIMD rate halved under sustained pool saturation: 100.0 -> [50 25 12.5]   # exactly the
+                                                                                # docs/plan.md ask
+--- PASS: TestHoldMetrics_P99AndErrorRate
+--- PASS: TestHoldMetrics_EmptyIsZero
+--- PASS: TestHoldMetrics_RingBufferWrapsAndForgetsOldSamples
+--- PASS: TestToken_IssueAndVerifyRoundTrip
+--- PASS: TestToken_TamperedSignatureRejected
+--- PASS: TestToken_WrongSubjectRejected                  # sub-binding: stolen token rejected
+--- PASS: TestToken_WrongEventRejected
+--- PASS: TestToken_ExpiredRejected
+--- PASS: TestToken_MalformedTokenRejected
+PASS
+
+# --- 5,000 distinct concurrent arrivals, direct against real Redis ---
+$ scripts/queue-loadtest -event=1 -n=5000 -concurrency=200        # cursor pre-advanced (admits all)
+5000 arrivals in 514.825583ms (9712/s) — admitted=5000 queued=0 errors=0
+$ redis-cli ZCARD '{event:1}:q'  -> 5000
+
+$ redis-cli DEL '{event:1}:q' '{event:1}:cursor'                  # reset, cursor starts at 0
+$ scripts/queue-loadtest -event=1 -n=5000 -concurrency=200        # now the queued path, same run
+5000 arrivals in 670.513416ms (7457/s) — admitted=0 queued=5000 errors=0
+$ redis-cli ZCARD '{event:1}:q'  -> 5000
+$ redis-cli GET '{event:1}:cursor'  -> 416   # AIMD advanced it mid-burst, real concurrent behavior
+
+# --- real HTTP server, real cognito-local tokens ---
+$ curl -X POST .../events/1/holds -d '{"seatOrdinals":[100]}'      # NO X-Admission-Token
+HTTP/1.1 403 Forbidden
+
+$ curl -X POST .../events/1/queue
+{"admissionToken":"v1.eyJzdWIiOiIxYTc5YTBmZi0yMDdhLTQwNmQtOTZmMC03YTYzMWMyM2MzNDMi..."}
+
+$ curl -X POST .../events/1/holds -H "X-Admission-Token: $ADMTOKEN" -d '{"seatOrdinals":[25000]}'
+HTTP/1.1 201 Created
+{"holdId":"e7a3c359-...","seats":[{"seatId":25001,"seatOrdinal":25000}], ...}
+
+$ curl -X POST .../events/1/holds -H "X-Admission-Token: ${ADMTOKEN%?????}XXXXX" -d '...'  # tampered
+HTTP/1.1 403 Forbidden
+
+$ curl -X POST .../events/1/holds -H "X-Admission-Token: $USER1_TOKEN" ...   # sent as USER 2's auth
+HTTP/1.1 403 Forbidden   # sub mismatch — a real user's real token, replayed, correctly rejected
+
+# --- AIMD loop visibly running against the live server (real waiting_room_audit rows) ---
+$ psql -c "SELECT rate, cursor_value, pool_utilization, red_pool FROM waiting_room_audit
+            WHERE event_id=1 ORDER BY id"
+ rate | cursor_value | pool_utilization | red_pool
+  546 |        22403 |             0.67 | f
+  631 |        23034 |                0 | f
+  636 |        23670 |                0 | f
+  641 |        24311 |                0 | f
+  646 |        24957 |                0 | f
+# rate climbing tick over tick under real green conditions — the loop is genuinely live, not a
+# no-op. The 3-tick HALVING proof above uses a deliberately, deterministically held pool connection
+# rather than racing local Postgres's sub-millisecond query time with concurrent curl — local
+# Postgres is fast enough that even heavy concurrent curl traffic rarely keeps a 3-connection pool
+# saturated for a full 1s tick window; a genuinely long-held connection is the honest way to
+# reproduce what real pool exhaustion looks like, and it's what the integration test above does.
+```
 
 ## Phase 9 — QR ticketing + reminders (additive)
 - [ ] Migration 0008 `tickets`

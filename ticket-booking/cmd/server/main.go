@@ -22,6 +22,7 @@ import (
 	"ticketing/internal/payment"
 	"ticketing/internal/projector"
 	"ticketing/internal/storage"
+	"ticketing/internal/waitingroom"
 	"ticketing/internal/wshub"
 )
 
@@ -53,12 +54,41 @@ func main() {
 	defer rdb.Close()
 	proj := projector.New(q, rdb)
 
+	metrics := waitingroom.NewHoldMetrics(200)
+	wq := waitingroom.New(rdb, cfg.WaitingRoomSecret)
+	controller := waitingroom.NewController(q, rdb, pool, metrics)
+	go runAIMDLoop(ctx, q, controller)
+
 	verifier := auth.NewVerifier(cfg.CognitoIssuerURL(), cfg.CognitoAudience)
 	hub := wshub.New(verifier, q, proj, rdb)
-	r := httpapi.NewRouter(verifier, q, inv, orders, hub, proj, cfg.S3LayoutsBucket, s3.PublicURL)
+	r := httpapi.NewRouter(verifier, q, inv, orders, hub, proj, wq, metrics, cfg.S3LayoutsBucket, s3.PublicURL)
 
 	log.Printf("ticketing server listening on %s (env=%s)", cfg.Addr, cfg.Env)
 	if err := http.ListenAndServe(cfg.Addr, r); err != nil {
 		log.Fatalf("server exited: %v", err)
+	}
+}
+
+// runAIMDLoop ticks docs/plan.md's AIMD controller at 1Hz for every event.
+// Runs IN this process, sharing the exact pool and HoldMetrics the HTTP
+// handlers write to — deliberately not a separate cmd/* binary: the
+// pool-utilization and hold-latency signals only mean something if they
+// come from the process actually serving hold requests. A real
+// multi-replica deployment would need a shared metrics backend for this to
+// generalize; documented in MILESTONES.md as a real gap, not fixed here.
+func runAIMDLoop(ctx context.Context, q db.Querier, controller *waitingroom.Controller) {
+	ticker := time.NewTicker(waitingroom.TickInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		eventIDs, err := q.ListAllEventIDs(ctx)
+		if err != nil {
+			log.Printf("aimd: list events: %v", err)
+			continue
+		}
+		for _, eventID := range eventIDs {
+			if _, err := controller.Tick(ctx, eventID); err != nil {
+				log.Printf("aimd: tick event %d: %v", eventID, err)
+			}
+		}
 	}
 }

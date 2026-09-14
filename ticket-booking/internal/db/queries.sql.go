@@ -862,6 +862,73 @@ func (q *Queries) InsertWSConnection(ctx context.Context, arg InsertWSConnection
 	return err
 }
 
+const insertWaitingRoomAudit = `-- name: InsertWaitingRoomAudit :exec
+INSERT INTO waiting_room_audit
+  (event_id, rate, cursor_value, hold_p99_ms, pool_utilization, hold_error_rate,
+   red_latency, red_pool, red_errors)
+VALUES
+  ($1, $2, $3, $4,
+   $5, $6,
+   $7, $8, $9)
+`
+
+type InsertWaitingRoomAuditParams struct {
+	EventID         int64   `json:"eventId"`
+	Rate            float64 `json:"rate"`
+	CursorValue     int64   `json:"cursorValue"`
+	HoldP99Ms       float64 `json:"holdP99Ms"`
+	PoolUtilization float64 `json:"poolUtilization"`
+	HoldErrorRate   float64 `json:"holdErrorRate"`
+	RedLatency      bool    `json:"redLatency"`
+	RedPool         bool    `json:"redPool"`
+	RedErrors       bool    `json:"redErrors"`
+}
+
+// Phase 8 (internal/waitingroom): one row per AIMD controller tick — the
+// mechanism that lets "the loop closing on real backpressure" be plotted
+// from real numbers instead of asserted in prose.
+func (q *Queries) InsertWaitingRoomAudit(ctx context.Context, arg InsertWaitingRoomAuditParams) error {
+	_, err := q.db.Exec(ctx, insertWaitingRoomAudit,
+		arg.EventID,
+		arg.Rate,
+		arg.CursorValue,
+		arg.HoldP99Ms,
+		arg.PoolUtilization,
+		arg.HoldErrorRate,
+		arg.RedLatency,
+		arg.RedPool,
+		arg.RedErrors,
+	)
+	return err
+}
+
+const listAllEventIDs = `-- name: ListAllEventIDs :many
+SELECT event_id FROM events ORDER BY event_id
+`
+
+// ListAllEventIDs: cmd/waiting-room-controller's per-tick scan target — at
+// local-dev scale (dozens of events) ticking every event every second is
+// cheap; a real deployment would scope this to events currently on sale.
+func (q *Queries) ListAllEventIDs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listAllEventIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var event_id int64
+		if err := rows.Scan(&event_id); err != nil {
+			return nil, err
+		}
+		items = append(items, event_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAvailableForBestAvailable = `-- name: ListAvailableForBestAvailable :many
 SELECT es.seat_id, es.seat_ordinal, st.row_id
 FROM event_seats es
@@ -1379,6 +1446,42 @@ func (q *Queries) ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]L
 			&i.SeatLabel,
 			&i.XCoord,
 			&i.YCoord,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWaitingRoomAudit = `-- name: ListWaitingRoomAudit :many
+SELECT id, event_id, rate, cursor_value, hold_p99_ms, pool_utilization, hold_error_rate, red_latency, red_pool, red_errors, created_at FROM waiting_room_audit WHERE event_id = $1 ORDER BY id
+`
+
+func (q *Queries) ListWaitingRoomAudit(ctx context.Context, eventID int64) ([]WaitingRoomAudit, error) {
+	rows, err := q.db.Query(ctx, listWaitingRoomAudit, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WaitingRoomAudit
+	for rows.Next() {
+		var i WaitingRoomAudit
+		if err := rows.Scan(
+			&i.ID,
+			&i.EventID,
+			&i.Rate,
+			&i.CursorValue,
+			&i.HoldP99Ms,
+			&i.PoolUtilization,
+			&i.HoldErrorRate,
+			&i.RedLatency,
+			&i.RedPool,
+			&i.RedErrors,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

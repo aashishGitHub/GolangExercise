@@ -77,6 +77,14 @@ type Querier interface {
 	InsertPayment(ctx context.Context, arg InsertPaymentParams) (Payment, error)
 	InsertRefund(ctx context.Context, arg InsertRefundParams) (Refund, error)
 	InsertWSConnection(ctx context.Context, arg InsertWSConnectionParams) error
+	// Phase 8 (internal/waitingroom): one row per AIMD controller tick — the
+	// mechanism that lets "the loop closing on real backpressure" be plotted
+	// from real numbers instead of asserted in prose.
+	InsertWaitingRoomAudit(ctx context.Context, arg InsertWaitingRoomAuditParams) error
+	// ListAllEventIDs: cmd/waiting-room-controller's per-tick scan target — at
+	// local-dev scale (dozens of events) ticking every event every second is
+	// cheap; a real deployment would scope this to events currently on sale.
+	ListAllEventIDs(ctx context.Context) ([]int64, error)
 	// ListAvailableForBestAvailable: candidate seats for the contiguous-run
 	// scan (internal/inventory.BestAvailable) — row_id is included because
 	// ordinals are contiguous ACROSS a whole section, not just within one row
@@ -125,6 +133,7 @@ type Querier interface {
 	// the DB's ordinal assignment and the static layout files can never
 	// disagree (docs/plan.md "Event publish pipeline").
 	ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]ListVenueSeatsOrderedRow, error)
+	ListWaitingRoomAudit(ctx context.Context, eventID int64) ([]WaitingRoomAudit, error)
 	MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error
 	MarkEventProcessed(ctx context.Context, arg MarkEventProcessedParams) error
 	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)

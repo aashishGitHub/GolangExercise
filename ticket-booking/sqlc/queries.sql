@@ -347,3 +347,24 @@ UPDATE ws_connections SET last_seq_sent = sqlc.arg(last_seq_sent) WHERE connecti
 
 -- name: CloseWSConnection :exec
 UPDATE ws_connections SET disconnected_at = now() WHERE connection_id = sqlc.arg(connection_id);
+
+-- Phase 8 (internal/waitingroom): one row per AIMD controller tick — the
+-- mechanism that lets "the loop closing on real backpressure" be plotted
+-- from real numbers instead of asserted in prose.
+-- name: InsertWaitingRoomAudit :exec
+INSERT INTO waiting_room_audit
+  (event_id, rate, cursor_value, hold_p99_ms, pool_utilization, hold_error_rate,
+   red_latency, red_pool, red_errors)
+VALUES
+  (sqlc.arg(event_id), sqlc.arg(rate), sqlc.arg(cursor_value), sqlc.arg(hold_p99_ms),
+   sqlc.arg(pool_utilization), sqlc.arg(hold_error_rate),
+   sqlc.arg(red_latency), sqlc.arg(red_pool), sqlc.arg(red_errors));
+
+-- name: ListWaitingRoomAudit :many
+SELECT * FROM waiting_room_audit WHERE event_id = sqlc.arg(event_id) ORDER BY id;
+
+-- ListAllEventIDs: cmd/waiting-room-controller's per-tick scan target — at
+-- local-dev scale (dozens of events) ticking every event every second is
+-- cheap; a real deployment would scope this to events currently on sale.
+-- name: ListAllEventIDs :many
+SELECT event_id FROM events ORDER BY event_id;
