@@ -20,6 +20,20 @@ type BulkInsertEventSeatsParams struct {
 	PriceCents  int32 `json:"priceCents"`
 }
 
+const countAvailableSeats = `-- name: CountAvailableSeats :one
+SELECT count(*) FROM event_seats WHERE event_id = $1 AND status = 0 AND sellable
+`
+
+// CountAvailableSeats: fine at catalog-listing scale (one query per event in
+// a <=100-row page); revisit with a materialized per-event counter only if
+// this becomes a measured bottleneck.
+func (q *Queries) CountAvailableSeats(ctx context.Context, eventID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countAvailableSeats, eventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEventSeats = `-- name: CountEventSeats :one
 SELECT count(*) FROM event_seats WHERE event_id = $1
 `
@@ -249,8 +263,9 @@ FROM sections s
 JOIN seat_rows r ON r.section_id = s.section_id
 JOIN seats st ON st.row_id = r.row_id
 JOIN event_seats es ON es.seat_id = st.seat_id AND es.event_id = $1
-GROUP BY s.section_id
+GROUP BY s.section_id, s.display_order
 HAVING bool_and(NOT es.sellable)
+ORDER BY s.display_order
 `
 
 // A section counts as closed for this event only once every seat in it is
@@ -346,15 +361,15 @@ LIMIT $3
 `
 
 type ListEventsParams struct {
-	Column1 string `json:"column1"`
-	Column2 int64  `json:"column2"`
-	Limit   int32  `json:"limit"`
+	Search   string `json:"search"`
+	AfterID  int64  `json:"afterId"`
+	RowLimit int32  `json:"rowLimit"`
 }
 
 // ListEvents: simple keyset pagination by event_id, optional trigram search
 // over title/artist (pg_trgm GIN-accelerated ILIKE — docs/plan.md decision #8).
 func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event, error) {
-	rows, err := q.db.Query(ctx, listEvents, arg.Column1, arg.Column2, arg.Limit)
+	rows, err := q.db.Query(ctx, listEvents, arg.Search, arg.AfterID, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +463,17 @@ func (q *Queries) ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]L
 		return nil, err
 	}
 	return items, nil
+}
+
+const minEventPriceCents = `-- name: MinEventPriceCents :one
+SELECT min(price_cents)::int FROM event_price_tiers WHERE event_id = $1
+`
+
+func (q *Queries) MinEventPriceCents(ctx context.Context, eventID int64) (int32, error) {
+	row := q.db.QueryRow(ctx, minEventPriceCents, eventID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const setEventOnSale = `-- name: SetEventOnSale :exec

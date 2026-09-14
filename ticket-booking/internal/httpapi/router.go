@@ -11,14 +11,15 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"ticketing/internal/auth"
+	"ticketing/internal/db"
 )
 
-// NewRouter builds the full route tree. /health is open; everything under
-// /api/v1 is wrapped by the auth verifier — "auth gates the API, not
-// browsing the static seat map assets", mirroring the sibling's "auth gates
-// sync, not capture" split (catalog/availability reads are Phase 2 and
-// stay outside this group; only identity-bearing routes need it).
-func NewRouter(verifier *auth.Verifier) *chi.Mux {
+// NewRouter builds the full route tree. /health and the catalog/
+// availability/pricing/layout routes are open; identity-bearing routes
+// (whoami now, holds/orders from Phase 3) are wrapped by the auth verifier —
+// "auth gates the API, not browsing the static seat map assets", mirroring
+// the sibling's "auth gates sync, not capture" split.
+func NewRouter(verifier *auth.Verifier, q db.Querier, layoutsBucket string, publicURL func(bucket, key string) string) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -26,9 +27,19 @@ func NewRouter(verifier *auth.Verifier) *chi.Mux {
 
 	r.Get("/health", handleHealth)
 
+	cat := &catalogAPI{q: q, layoutsBucket: layoutsBucket, publicURL: publicURL}
+
 	r.Route("/api/v1", func(api chi.Router) {
-		api.Use(verifier.Middleware)
-		api.Get("/whoami", handleWhoami)
+		api.Get("/events", cat.listEvents)
+		api.Get("/events/{eventID}", cat.getEvent)
+		api.Get("/events/{eventID}/availability", cat.getAvailability)
+		api.Get("/events/{eventID}/pricing", cat.getPricing)
+		api.Get("/venues/{venueID}/layout", cat.getVenueLayout)
+
+		api.Group(func(authed chi.Router) {
+			authed.Use(verifier.Middleware)
+			authed.Get("/whoami", handleWhoami)
+		})
 	})
 
 	return r

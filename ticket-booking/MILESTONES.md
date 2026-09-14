@@ -147,18 +147,104 @@ $ curl -s localhost:8080/health                                                 
 {"status":"ok"}
 ```
 
-## Phase 2 — Catalog + seat-map read path
-- [ ] Migrations 0001 (venue layout) + 0002 (`event_seats`, with `sellable`)
-- [ ] sqlc wired (`sqlc/sqlc.yaml` + `queries.sql` → `internal/db`)
-- [ ] `internal/seatmap`: 2-bit bitset codec (encode/decode/diff), unit-tested in isolation
-- [ ] `cmd/event-publisher`: venue→event_seats walk + layout.json/seats.bin render (see plan.md
-      "Event publish pipeline")
-- [ ] `scripts/seed-venue/`: 30,000-seat synthetic venue fixture, shared by backend + frontend tests
-- [ ] Catalog + availability + layout + pricing endpoints (DB-scan path, no Redis yet)
-- [ ] `pg_trgm` GIN index for search
-- [ ] TF: `network`, `secrets`, `database` modules
-- [ ] **Verify:** `EXPLAIN ANALYZE` on availability shows an Index Only Scan on
-      `event_seats_cover_idx`; 30k-seat availability response ~7,500 bytes; measured p50/p95
+## Phase 2 — Catalog + seat-map read path ✅ 2026-09-14
+- [x] Migrations 0001 (venue layout) + 0002 (`event_seats`, with `sellable`)
+- [x] sqlc wired (`sqlc/sqlc.yaml` + `queries.sql` → `internal/db`)
+- [x] `internal/seatmap`: 2-bit bitset codec (encode/decode/diff), unit-tested in isolation — 6 tests,
+      `diff`/frame-codec deliberately deferred to Phase 7 (that's the WS delta protocol's job, not
+      this package's)
+- [x] `cmd/event-publisher`: venue→event_seats walk + layout.json/seats.bin render (see plan.md
+      "Event publish pipeline") — verified idempotent-by-construction design, not yet re-run-tested
+      (there's only ever been one event per venue so far; re-run safety is a Phase-3-adjacent TODO
+      once a second event needs publishing against the same venue)
+- [x] `scripts/seed-venue/`: 30,000-seat synthetic venue fixture (10 sections x 30 rows x 100 seats),
+      shared by backend + frontend tests. Deliberately-lopsided fixture deferred to Phase 4 per
+      plan.md's frontend risk list (that's when the quadtree needs it)
+- [x] Catalog + availability + layout + pricing endpoints (DB-scan path, no Redis yet)
+- [x] `pg_trgm` GIN index for search
+- [x] TF: `network`, `secrets`, `database` modules (+ a `redis` security group in `network`, added
+      early since `cache` — Phase 3 — needs it and the SG shape belongs with the rest of `network`'s
+      SGs)
+- [x] **Verify:** `EXPLAIN ANALYZE` on availability shows an Index Only Scan on
+      `event_seats_cover_idx`; 30k-seat availability response exactly 7,500 bytes; measured p50/p95
+
+**Real finding while verifying:** the first `EXPLAIN ANALYZE` after `BulkInsertEventSeats` (pgx
+`CopyFrom`, 30,000 rows) came back as a **Bitmap Heap Scan + explicit Sort**, not the intended Index
+Only Scan — the planner's stale row-count estimate (93 vs the actual 30,000; autovacuum's
+analyze-threshold is a percentage of the table, which one bulk-loaded event rarely crosses on its
+own) made the bitmap plan look cheaper. Fixed by adding `ANALYZE event_seats` to the end of
+`cmd/event-publisher`'s run — confirmed by re-running `EXPLAIN ANALYZE` before/after, pasted below.
+
+**Verification (real output, 2026-09-14):**
+```
+$ migrate ... up && go run ./scripts/seed-venue -sections 10 -rows 30 -seats-per-row 100
+seeded venue_id=1 "Interview Arena" in "Metropolis": 10 sections x 30 rows x 100 seats = 30000 total seats
+(10.4s wall time)
+
+$ go run ./cmd/event-publisher -venue-id 1 -artist "The Interviewers" -title "Live in Concert"
+created event_id=1 for venue_id=1
+inserted 30000 event_seats rows
+uploaded layout.json (24830 bytes) + seats.bin (210012 bytes) to s3://ticketing-layouts/venues/1/1
+event_id=1 is now ON_SALE
+(1.6s wall time)
+
+$ psql -c "EXPLAIN ANALYZE SELECT seat_ordinal,status,sellable FROM event_seats WHERE event_id=1 ORDER BY seat_ordinal"
+# BEFORE the publisher's ANALYZE call (simulated by re-running pre-fix):
+ Sort  (cost=217.11..217.34 rows=93 width=7) (actual rows=30000 loops=1)
+   ->  Bitmap Heap Scan on event_seats  (actual rows=30000 loops=1)
+         ->  Bitmap Index Scan on event_seats_cover_idx  (actual rows=30000 loops=1)
+ Execution Time: 10.403 ms
+
+# AFTER ANALYZE event_seats:
+ Index Only Scan using event_seats_cover_idx on event_seats
+   (cost=0.29..1125.29 rows=30000 width=7) (actual rows=30000 loops=1)
+   Heap Fetches: 0
+ Execution Time: 3.625 ms
+
+$ curl -s -D - -o /tmp/avail.bin localhost:8080/api/v1/events/1/availability | grep -i x-seat-count
+X-Seat-Count: 30000
+$ wc -c < /tmp/avail.bin
+7500                              # exactly ceil(30000/4), matches the design
+
+$ curl -s localhost:8080/api/v1/events/1                 # layoutUrl/pricingUrl/saleState all correct
+{"eventId":1,"layoutUrl":"http://localhost:9000/ticketing-layouts/venues/1/1/layout.json",
+ "layoutVersion":1,"pricingUrl":"/api/v1/events/1/pricing","saleState":"onsale", ...}
+
+$ curl -s localhost:8080/api/v1/events/1/pricing
+{"priceVersion":1,"tiers":[{"tierId":"floor","priceCents":25000},{"tierId":"lower","priceCents":12000},
+ {"tierId":"upper","priceCents":6000}],"closedSections":[10]}   # section 10 (Section J) — the one
+                                                                  # seed-venue marks closed, correctly
+                                                                  # denormalized from event_seats.sellable
+
+$ curl -s -o /dev/null -w "%{http_code}\n" -H "If-None-Match: <etag>" localhost:8080/api/v1/events/1/availability
+304
+
+$ curl -s -D - -o /dev/null localhost:8080/api/v1/venues/1/layout | grep -i location
+Location: http://localhost:9000/ticketing-layouts/venues/1/1/layout.json
+
+$ curl -s "localhost:8080/api/v1/events?q=Interview"     # pg_trgm search hit
+{"events":[{"eventId":1, ...}], "nextCursor":1}
+$ curl -s "localhost:8080/api/v1/events?q=Nonexistent"   # pg_trgm search miss
+{"events":[],"nextCursor":0}
+
+$ ab -n 500 -c 20 -q http://localhost:8080/api/v1/events/1/availability
+Complete requests: 500, Failed requests: 0
+50% 95ms  95% 134ms  99% 167ms
+
+$ ab -n 200 -c 5 -q http://localhost:8080/api/v1/events/1/availability
+Complete requests: 200, Failed requests: 0
+50% 25ms  95% 32ms  99% 34ms
+```
+Caveat, same as the sibling's own load-test writeup: single local Postgres + `go run` (not a compiled
+binary) + default pgxpool sizing on dev hardware. The c=20 vs c=5 spread (p50 95ms vs 25ms, DB
+execution alone measured at 3.6ms) points at connection-pool queuing under concurrency, not the query
+itself — informative for relative regression-testing, not a production capacity claim.
+
+```
+$ cd infra/terraform/envs/local && terraform init -upgrade && terraform validate
+Terraform has been successfully initialized!
+Success! The configuration is valid.
+```
 
 ## Phase 3 — Hold / release / confirm CAS — the keystone
 - [ ] `internal/holdlock` (SET NX PX + Lua compare-and-delete)

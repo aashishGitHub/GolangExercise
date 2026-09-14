@@ -13,6 +13,10 @@ type Querier interface {
 	// CopyFrom (sqlc :copyfrom) rather than one INSERT per row — the walk is
 	// 30,000+ rows for a large venue.
 	BulkInsertEventSeats(ctx context.Context, arg []BulkInsertEventSeatsParams) (int64, error)
+	// CountAvailableSeats: fine at catalog-listing scale (one query per event in
+	// a <=100-row page); revisit with a materialized per-event counter only if
+	// this becomes a measured bottleneck.
+	CountAvailableSeats(ctx context.Context, eventID int64) (int64, error)
 	CountEventSeats(ctx context.Context, eventID int64) (int64, error)
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
 	CreateEventPriceTier(ctx context.Context, arg CreateEventPriceTierParams) error
@@ -44,6 +48,7 @@ type Querier interface {
 	// the DB's ordinal assignment and the static layout files can never
 	// disagree (docs/plan.md "Event publish pipeline").
 	ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]ListVenueSeatsOrderedRow, error)
+	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)
 	SetEventOnSale(ctx context.Context, eventID int64) error
 }
 

@@ -52,6 +52,15 @@ INSERT INTO event_price_tiers (event_id, tier, price_cents) VALUES ($1, $2, $3);
 -- name: ListEventPriceTiers :many
 SELECT * FROM event_price_tiers WHERE event_id = $1 ORDER BY tier;
 
+-- name: MinEventPriceCents :one
+SELECT min(price_cents)::int FROM event_price_tiers WHERE event_id = $1;
+
+-- CountAvailableSeats: fine at catalog-listing scale (one query per event in
+-- a <=100-row page); revisit with a materialized per-event counter only if
+-- this becomes a measured bottleneck.
+-- name: CountAvailableSeats :one
+SELECT count(*) FROM event_seats WHERE event_id = $1 AND status = 0 AND sellable;
+
 -- name: GetEvent :one
 SELECT * FROM events WHERE event_id = $1;
 
@@ -62,10 +71,10 @@ UPDATE events SET status = 'ON_SALE' WHERE event_id = $1;
 -- over title/artist (pg_trgm GIN-accelerated ILIKE — docs/plan.md decision #8).
 -- name: ListEvents :many
 SELECT * FROM events
-WHERE ($1::text = '' OR title ILIKE '%' || $1 || '%' OR artist ILIKE '%' || $1 || '%')
-  AND ($2::bigint = 0 OR event_id > $2)
+WHERE (sqlc.arg(search)::text = '' OR title ILIKE '%' || sqlc.arg(search) || '%' OR artist ILIKE '%' || sqlc.arg(search) || '%')
+  AND (sqlc.arg(after_id)::bigint = 0 OR event_id > sqlc.arg(after_id))
 ORDER BY event_id
-LIMIT $3;
+LIMIT sqlc.arg(row_limit);
 
 -- BulkInsertEventSeats: cmd/event-publisher's population step, via pgx's
 -- CopyFrom (sqlc :copyfrom) rather than one INSERT per row — the walk is
@@ -96,5 +105,6 @@ FROM sections s
 JOIN seat_rows r ON r.section_id = s.section_id
 JOIN seats st ON st.row_id = r.row_id
 JOIN event_seats es ON es.seat_id = st.seat_id AND es.event_id = $1
-GROUP BY s.section_id
-HAVING bool_and(NOT es.sellable);
+GROUP BY s.section_id, s.display_order
+HAVING bool_and(NOT es.sellable)
+ORDER BY s.display_order;

@@ -30,7 +30,29 @@ locals {
   name_prefix = "ticketing-local"
 }
 
-# Modules are added phase by phase (see docs/plan.md "Terraform modules"):
-# network + secrets + database land in Phase 2, cache in Phase 3, the rest
-# from Phase 11 onward. No resources yet — this file exists so
-# `terraform init && terraform validate` is green from Phase 0.
+module "network" {
+  source      = "../../modules/network"
+  name_prefix = local.name_prefix
+}
+
+module "secrets" {
+  source      = "../../modules/secrets"
+  name_prefix = local.name_prefix
+}
+
+module "database" {
+  source = "../../modules/database"
+
+  name_prefix                 = local.name_prefix
+  vpc_id                      = module.network.vpc_id
+  private_subnet_ids          = module.network.private_subnet_ids
+  aurora_security_group_id    = module.network.aurora_security_group_id
+  rds_proxy_security_group_id = module.network.rds_proxy_security_group_id
+  db_secret_arn               = module.secrets.db_secret_arn
+  db_username                 = module.secrets.db_username
+  db_password                 = module.secrets.db_password
+}
+
+# Remaining modules (cache, auth, storage, compute, api, websocket, eventing,
+# waf, observability, gated search, waitingroom) are added phase by phase —
+# see docs/plan.md "Terraform modules" for the phase-by-phase table.
