@@ -100,6 +100,17 @@ services:
     ports:
       - "5001:5000"
 
+  # Phase 12 only: cmd/dynamo-spike's target — the ALTERNATIVE seat-state
+  # arbiter docs/script.md describes, evaluated as a non-blocking,
+  # explicitly-not-dual-maintained comparison. Real DynamoDB semantics
+  # (conditional writes, TransactWriteItems, ConditionalCheckFailedException),
+  # not a Postgres-behind-a-facade stand-in.
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.5.4
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+    ports:
+      - "8000:8000"
+
 volumes:
   postgres-data:
   cognito-local-data:

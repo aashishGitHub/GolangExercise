@@ -21,13 +21,18 @@ require (
 require (
 	github.com/aws/aws-lambda-go v1.55.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.4 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression v1.9.4 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.0 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider v1.74.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.68.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.41.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.3 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.13.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.10.0 // indirect
