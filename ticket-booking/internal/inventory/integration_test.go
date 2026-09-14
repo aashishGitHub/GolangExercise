@@ -515,3 +515,55 @@ func TestBestAvailable_NoRunLargeEnoughReturnsErrNoContiguousSeats(t *testing.T)
 		t.Fatalf("err = %v, want ErrNoContiguousSeats", err)
 	}
 }
+
+// TestReleaseHold_IdempotentOnAlreadyGoneHold: the rowcount-zero-is-success
+// and outbox-in-the-same-transaction behavior that used to be gomock-tested
+// before ReleaseHold started opening its own real transaction.
+func TestReleaseHold_IdempotentOnAlreadyGoneHold(t *testing.T) {
+	pool := newTestPool(t)
+	svc := newRealService(t, pool, 10*time.Minute)
+	ctx := context.Background()
+
+	eventID := seedTestEvent(t, pool, testVenueID)
+	seatID := int64(400)
+	seedTestEventSeats(t, pool, eventID, []int64{seatID})
+
+	hold, err := svc.AcquireHold(ctx, eventID, []int64{seatID}, "release-test-user")
+	if err != nil {
+		t.Fatalf("AcquireHold: %v", err)
+	}
+
+	// First release: real rowcount>0, must succeed and produce a
+	// seat.released outbox row.
+	if err := svc.ReleaseHold(ctx, eventID, []int64{seatID}, hold.HoldID, "release-test-user"); err != nil {
+		t.Fatalf("first ReleaseHold: %v", err)
+	}
+	var releasedEvents int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM domain_events WHERE aggregate_id=$1 AND event_type='seat.released'`,
+		eventIDSeatKey(eventID, seatID)).Scan(&releasedEvents); err != nil {
+		t.Fatalf("query domain_events: %v", err)
+	}
+	if releasedEvents != 1 {
+		t.Fatalf("seat.released outbox rows = %d, want 1", releasedEvents)
+	}
+
+	// Second release of the SAME (now-gone) hold: rowcount 0, must still
+	// return nil — not an error (docs/plan.md "Release" — idempotent by
+	// construction) — and must NOT emit a second seat.released event.
+	if err := svc.ReleaseHold(ctx, eventID, []int64{seatID}, hold.HoldID, "release-test-user"); err != nil {
+		t.Fatalf("second (already-gone) ReleaseHold: err = %v, want nil", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM domain_events WHERE aggregate_id=$1 AND event_type='seat.released'`,
+		eventIDSeatKey(eventID, seatID)).Scan(&releasedEvents); err != nil {
+		t.Fatalf("query domain_events: %v", err)
+	}
+	if releasedEvents != 1 {
+		t.Fatalf("seat.released outbox rows after idempotent re-release = %d, want still 1", releasedEvents)
+	}
+}
+
+func eventIDSeatKey(eventID, seatID int64) string {
+	return fmt.Sprintf("%d:%d", eventID, seatID)
+}

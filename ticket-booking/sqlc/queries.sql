@@ -185,6 +185,31 @@ FROM event_seats
 WHERE hold_id = sqlc.arg(hold_id)
 ORDER BY seat_id;
 
+-- name: InsertDomainEvent :exec
+INSERT INTO domain_events (event_id, aggregate_id, event_type, schema_version, payload)
+VALUES (sqlc.arg(event_id), sqlc.arg(aggregate_id), sqlc.arg(event_type), sqlc.arg(schema_version), sqlc.arg(payload));
+
+-- name: ListUnpublishedDomainEvents :many
+SELECT event_id, aggregate_id, event_type, schema_version, payload
+FROM domain_events
+WHERE published_at IS NULL
+ORDER BY created_at
+LIMIT sqlc.arg(row_limit);
+
+-- name: MarkDomainEventPublished :exec
+UPDATE domain_events SET published_at = now() WHERE event_id = sqlc.arg(event_id);
+
+-- ListExpiredHolds: cmd/hold-reaper's scan target — the ACTIVE release
+-- (UX freshness only; passive expiry in the CAS predicate is the actual
+-- correctness guarantee, docs/plan.md decision #2).
+-- name: ListExpiredHolds :many
+SELECT DISTINCT event_id, hold_id
+FROM event_seats
+WHERE status IN (1, 3) AND hold_expires_at < now() AND hold_id IS NOT NULL;
+
+-- name: ListSeatIDsForHold :many
+SELECT seat_id FROM event_seats WHERE event_id = sqlc.arg(event_id) AND hold_id = sqlc.arg(hold_id);
+
 -- ListAvailableForBestAvailable: candidate seats for the contiguous-run
 -- scan (internal/inventory.BestAvailable) — row_id is included because
 -- ordinals are contiguous ACROSS a whole section, not just within one row

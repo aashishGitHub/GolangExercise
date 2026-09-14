@@ -14,6 +14,7 @@ import (
 	reflect "reflect"
 	db "ticketing/internal/db"
 
+	uuid "github.com/google/uuid"
 	pgtype "github.com/jackc/pgx/v5/pgtype"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -281,6 +282,20 @@ func (mr *MockQuerierMockRecorder) GetVenue(ctx, venueID any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetVenue", reflect.TypeOf((*MockQuerier)(nil).GetVenue), ctx, venueID)
 }
 
+// InsertDomainEvent mocks base method.
+func (m *MockQuerier) InsertDomainEvent(ctx context.Context, arg db.InsertDomainEventParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertDomainEvent", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertDomainEvent indicates an expected call of InsertDomainEvent.
+func (mr *MockQuerierMockRecorder) InsertDomainEvent(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertDomainEvent", reflect.TypeOf((*MockQuerier)(nil).InsertDomainEvent), ctx, arg)
+}
+
 // InsertHoldsAudit mocks base method.
 func (m *MockQuerier) InsertHoldsAudit(ctx context.Context, arg db.InsertHoldsAuditParams) error {
 	m.ctrl.T.Helper()
@@ -370,6 +385,51 @@ func (mr *MockQuerierMockRecorder) ListEvents(ctx, arg any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEvents", reflect.TypeOf((*MockQuerier)(nil).ListEvents), ctx, arg)
 }
 
+// ListExpiredHolds mocks base method.
+func (m *MockQuerier) ListExpiredHolds(ctx context.Context) ([]db.ListExpiredHoldsRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListExpiredHolds", ctx)
+	ret0, _ := ret[0].([]db.ListExpiredHoldsRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListExpiredHolds indicates an expected call of ListExpiredHolds.
+func (mr *MockQuerierMockRecorder) ListExpiredHolds(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListExpiredHolds", reflect.TypeOf((*MockQuerier)(nil).ListExpiredHolds), ctx)
+}
+
+// ListSeatIDsForHold mocks base method.
+func (m *MockQuerier) ListSeatIDsForHold(ctx context.Context, arg db.ListSeatIDsForHoldParams) ([]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSeatIDsForHold", ctx, arg)
+	ret0, _ := ret[0].([]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSeatIDsForHold indicates an expected call of ListSeatIDsForHold.
+func (mr *MockQuerierMockRecorder) ListSeatIDsForHold(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSeatIDsForHold", reflect.TypeOf((*MockQuerier)(nil).ListSeatIDsForHold), ctx, arg)
+}
+
+// ListUnpublishedDomainEvents mocks base method.
+func (m *MockQuerier) ListUnpublishedDomainEvents(ctx context.Context, rowLimit int32) ([]db.ListUnpublishedDomainEventsRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListUnpublishedDomainEvents", ctx, rowLimit)
+	ret0, _ := ret[0].([]db.ListUnpublishedDomainEventsRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListUnpublishedDomainEvents indicates an expected call of ListUnpublishedDomainEvents.
+func (mr *MockQuerierMockRecorder) ListUnpublishedDomainEvents(ctx, rowLimit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListUnpublishedDomainEvents", reflect.TypeOf((*MockQuerier)(nil).ListUnpublishedDomainEvents), ctx, rowLimit)
+}
+
 // ListVenueSeatsOrdered mocks base method.
 func (m *MockQuerier) ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]db.ListVenueSeatsOrderedRow, error) {
 	m.ctrl.T.Helper()
@@ -383,6 +443,20 @@ func (m *MockQuerier) ListVenueSeatsOrdered(ctx context.Context, venueID int64) 
 func (mr *MockQuerierMockRecorder) ListVenueSeatsOrdered(ctx, venueID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListVenueSeatsOrdered", reflect.TypeOf((*MockQuerier)(nil).ListVenueSeatsOrdered), ctx, venueID)
+}
+
+// MarkDomainEventPublished mocks base method.
+func (m *MockQuerier) MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkDomainEventPublished", ctx, eventID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkDomainEventPublished indicates an expected call of MarkDomainEventPublished.
+func (mr *MockQuerierMockRecorder) MarkDomainEventPublished(ctx, eventID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkDomainEventPublished", reflect.TypeOf((*MockQuerier)(nil).MarkDomainEventPublished), ctx, eventID)
 }
 
 // MinEventPriceCents mocks base method.

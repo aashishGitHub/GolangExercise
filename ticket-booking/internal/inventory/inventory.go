@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ticketing/internal/db"
+	"ticketing/internal/events"
 )
 
 var (
@@ -184,6 +185,20 @@ func (s *Service) AcquireHold(ctx context.Context, eventID int64, seatIDs []int6
 		return nil, &ConflictError{Conflicts: conflicts}
 	}
 
+	// Outbox write in the SAME transaction as the CAS (docs/plan.md
+	// decision #2's mechanism) — one event per seat, matching holds_audit's
+	// own per-seat granularity.
+	for _, r := range rows {
+		aggregateID := fmt.Sprintf("%d:%d", eventID, r.SeatID)
+		if err := events.Publish(ctx, qtx, aggregateID, "seat.held", map[string]any{
+			"eventId": eventID, "seatId": r.SeatID, "seatOrdinal": r.SeatOrdinal,
+			"holdId": holdID, "fenceToken": r.FenceToken, "expiresAt": r.HoldExpiresAt.Time,
+		}); err != nil {
+			s.releaseRedisBatch(ctx, eventID, acquiredRedis, holdID.String())
+			return nil, fmt.Errorf("acquire hold: publish outbox event: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		s.releaseRedisBatch(ctx, eventID, acquiredRedis, holdID.String())
 		return nil, fmt.Errorf("acquire hold: commit: %w", err)
@@ -205,7 +220,11 @@ func (s *Service) AcquireHold(ctx context.Context, eventID int64, seatIDs []int6
 
 // ReleaseHold is idempotent by construction (docs/plan.md "Release") —
 // rowcount 0 is success, not an error: the hold was already gone (expired-
-// and-reclaimed, or already confirmed).
+// and-reclaimed, or already confirmed). Runs in an explicit transaction
+// purely so the outbox write shares the CAS's fate (docs/plan.md decision
+// #2) — there is no partial-match/rollback concern here the way there is
+// for Acquire/Confirm, since a release's WHERE clause has no "must match
+// every seat or none" requirement.
 func (s *Service) ReleaseHold(ctx context.Context, eventID int64, seatIDs []int64, holdID uuid.UUID, userSub string) error {
 	seatIDs, _ = sortDedup(seatIDs)
 	for _, seatID := range seatIDs {
@@ -214,16 +233,36 @@ func (s *Service) ReleaseHold(ctx context.Context, eventID int64, seatIDs []int6
 		}
 	}
 
-	n, err := s.q.ReleaseHold(ctx, db.ReleaseHoldParams{
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("release hold: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	qtx := db.New(tx)
+
+	n, err := qtx.ReleaseHold(ctx, db.ReleaseHoldParams{
 		EventID: eventID, SeatIds: seatIDs, HoldID: toPgUUID(holdID),
 	})
 	if err != nil {
 		return fmt.Errorf("release hold: %w", err)
 	}
+	if n > 0 {
+		for _, seatID := range seatIDs {
+			aggregateID := fmt.Sprintf("%d:%d", eventID, seatID)
+			if err := events.Publish(ctx, qtx, aggregateID, "seat.released", map[string]any{
+				"eventId": eventID, "seatId": seatID, "holdId": holdID,
+			}); err != nil {
+				return fmt.Errorf("release hold: publish outbox event: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("release hold: commit: %w", err)
+	}
+
 	for _, seatID := range seatIDs {
 		s.audit(ctx, holdID, eventID, seatID, userSub, "RELEASED", 0, time.Time{})
 	}
-	_ = n
 	return nil
 }
 
@@ -278,6 +317,16 @@ func (s *Service) ConfirmSeats(ctx context.Context, eventID int64, seatIDs, fenc
 		}
 		return fmt.Errorf("confirm seats: %w (matched %d of %d — hold expired or fence stale)", ErrHoldExpired, n, len(seatIDs))
 	}
+
+	for _, seatID := range seatIDs {
+		aggregateID := fmt.Sprintf("%d:%d", eventID, seatID)
+		if err := events.Publish(ctx, qtx, aggregateID, "seat.booked", map[string]any{
+			"eventId": eventID, "seatId": seatID, "orderId": orderID, "holdId": holdID,
+		}); err != nil {
+			return fmt.Errorf("confirm seats: publish outbox event: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("confirm seats: commit: %w", err)
 	}

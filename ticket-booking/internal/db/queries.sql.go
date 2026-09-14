@@ -483,6 +483,30 @@ func (q *Queries) GetVenue(ctx context.Context, venueID int64) (Venue, error) {
 	return i, err
 }
 
+const insertDomainEvent = `-- name: InsertDomainEvent :exec
+INSERT INTO domain_events (event_id, aggregate_id, event_type, schema_version, payload)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertDomainEventParams struct {
+	EventID       uuid.UUID `json:"eventId"`
+	AggregateID   string    `json:"aggregateId"`
+	EventType     string    `json:"eventType"`
+	SchemaVersion int32     `json:"schemaVersion"`
+	Payload       []byte    `json:"payload"`
+}
+
+func (q *Queries) InsertDomainEvent(ctx context.Context, arg InsertDomainEventParams) error {
+	_, err := q.db.Exec(ctx, insertDomainEvent,
+		arg.EventID,
+		arg.AggregateID,
+		arg.EventType,
+		arg.SchemaVersion,
+		arg.Payload,
+	)
+	return err
+}
+
 const insertHoldsAudit = `-- name: InsertHoldsAudit :exec
 INSERT INTO holds_audit (hold_id, event_id, seat_id, user_sub, outcome, fence_token, expires_at, latency_ms)
 VALUES ($1, $2, $3, $4,
@@ -701,6 +725,111 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event
 	return items, nil
 }
 
+const listExpiredHolds = `-- name: ListExpiredHolds :many
+SELECT DISTINCT event_id, hold_id
+FROM event_seats
+WHERE status IN (1, 3) AND hold_expires_at < now() AND hold_id IS NOT NULL
+`
+
+type ListExpiredHoldsRow struct {
+	EventID int64       `json:"eventId"`
+	HoldID  pgtype.UUID `json:"holdId"`
+}
+
+// ListExpiredHolds: cmd/hold-reaper's scan target — the ACTIVE release
+// (UX freshness only; passive expiry in the CAS predicate is the actual
+// correctness guarantee, docs/plan.md decision #2).
+func (q *Queries) ListExpiredHolds(ctx context.Context) ([]ListExpiredHoldsRow, error) {
+	rows, err := q.db.Query(ctx, listExpiredHolds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExpiredHoldsRow
+	for rows.Next() {
+		var i ListExpiredHoldsRow
+		if err := rows.Scan(&i.EventID, &i.HoldID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSeatIDsForHold = `-- name: ListSeatIDsForHold :many
+SELECT seat_id FROM event_seats WHERE event_id = $1 AND hold_id = $2
+`
+
+type ListSeatIDsForHoldParams struct {
+	EventID int64       `json:"eventId"`
+	HoldID  pgtype.UUID `json:"holdId"`
+}
+
+func (q *Queries) ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHoldParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listSeatIDsForHold, arg.EventID, arg.HoldID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var seat_id int64
+		if err := rows.Scan(&seat_id); err != nil {
+			return nil, err
+		}
+		items = append(items, seat_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnpublishedDomainEvents = `-- name: ListUnpublishedDomainEvents :many
+SELECT event_id, aggregate_id, event_type, schema_version, payload
+FROM domain_events
+WHERE published_at IS NULL
+ORDER BY created_at
+LIMIT $1
+`
+
+type ListUnpublishedDomainEventsRow struct {
+	EventID       uuid.UUID `json:"eventId"`
+	AggregateID   string    `json:"aggregateId"`
+	EventType     string    `json:"eventType"`
+	SchemaVersion int32     `json:"schemaVersion"`
+	Payload       []byte    `json:"payload"`
+}
+
+func (q *Queries) ListUnpublishedDomainEvents(ctx context.Context, rowLimit int32) ([]ListUnpublishedDomainEventsRow, error) {
+	rows, err := q.db.Query(ctx, listUnpublishedDomainEvents, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnpublishedDomainEventsRow
+	for rows.Next() {
+		var i ListUnpublishedDomainEventsRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.AggregateID,
+			&i.EventType,
+			&i.SchemaVersion,
+			&i.Payload,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVenueSeatsOrdered = `-- name: ListVenueSeatsOrdered :many
 SELECT
     s.section_id, s.name AS section_name, s.tier AS section_tier,
@@ -765,6 +894,15 @@ func (q *Queries) ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]L
 		return nil, err
 	}
 	return items, nil
+}
+
+const markDomainEventPublished = `-- name: MarkDomainEventPublished :exec
+UPDATE domain_events SET published_at = now() WHERE event_id = $1
+`
+
+func (q *Queries) MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markDomainEventPublished, eventID)
+	return err
 }
 
 const minEventPriceCents = `-- name: MinEventPriceCents :one

@@ -7,6 +7,7 @@ package db
 import (
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -56,6 +57,7 @@ type Querier interface {
 	// seats are found by hold_id alone via event_seats_hold_id_idx.
 	GetSeatsByHoldID(ctx context.Context, holdID pgtype.UUID) ([]GetSeatsByHoldIDRow, error)
 	GetVenue(ctx context.Context, venueID int64) (Venue, error)
+	InsertDomainEvent(ctx context.Context, arg InsertDomainEventParams) error
 	InsertHoldsAudit(ctx context.Context, arg InsertHoldsAuditParams) error
 	// ListAvailableForBestAvailable: candidate seats for the contiguous-run
 	// scan (internal/inventory.BestAvailable) — row_id is included because
@@ -76,12 +78,19 @@ type Querier interface {
 	// ListEvents: simple keyset pagination by event_id, optional trigram search
 	// over title/artist (pg_trgm GIN-accelerated ILIKE — docs/plan.md decision #8).
 	ListEvents(ctx context.Context, arg ListEventsParams) ([]Event, error)
+	// ListExpiredHolds: cmd/hold-reaper's scan target — the ACTIVE release
+	// (UX freshness only; passive expiry in the CAS predicate is the actual
+	// correctness guarantee, docs/plan.md decision #2).
+	ListExpiredHolds(ctx context.Context) ([]ListExpiredHoldsRow, error)
+	ListSeatIDsForHold(ctx context.Context, arg ListSeatIDsForHoldParams) ([]int64, error)
+	ListUnpublishedDomainEvents(ctx context.Context, rowLimit int32) ([]ListUnpublishedDomainEventsRow, error)
 	// ListVenueSeatsOrdered drives both cmd/event-publisher's ordinal
 	// assignment and layout.json/seats.bin rendering from the SAME walk, in the
 	// SAME order (section.display_order, row.display_order, seat_label) — so
 	// the DB's ordinal assignment and the static layout files can never
 	// disagree (docs/plan.md "Event publish pipeline").
 	ListVenueSeatsOrdered(ctx context.Context, venueID int64) ([]ListVenueSeatsOrderedRow, error)
+	MarkDomainEventPublished(ctx context.Context, eventID uuid.UUID) error
 	MinEventPriceCents(ctx context.Context, eventID int64) (int32, error)
 	// ReleaseHold: idempotent by construction — rowcount 0 is success (the
 	// hold was already gone), not an error.

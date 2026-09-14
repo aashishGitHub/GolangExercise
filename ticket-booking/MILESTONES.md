@@ -396,13 +396,69 @@ $ npx playwright test --project=chromium
   # this is what actually caught the CORS bug and the preventDefault bug
 ```
 
-## Phase 5 — Expiry side effects: outbox + reaper
-- [ ] Migration 0006 `domain_events`/`processed_events`
-- [ ] `internal/events.Publish` inside every inventory transaction
-- [ ] `outbox-relay` → moto EventBridge
-- [ ] `hold-reaper` + `internal/scheduler`
-- [ ] **Verify:** hold survives with reaper stopped yet a fresh hold still succeeds (passive expiry);
-      reaper restarted flips status + outbox + relay, all pasted real `SELECT` output
+## Phase 5 — Expiry side effects: outbox + reaper ✅ 2026-09-14
+- [x] Migration 0005 `domain_events`/`processed_events` (aggregate_id widened to TEXT per decision #7
+      — event_seats aggregates are `"eventId:seatId"`, not a single UUID)
+- [x] `internal/events.Publish` inside every `inventory` transaction — Acquire ("seat.held"), Release
+      ("seat.released", only when rowcount>0 — no event for an idempotent no-op release), Confirm
+      ("seat.booked")
+- [x] `internal/outbox` (`Relay.RunOnce`, `FailedEntryCount`-checked, not just the absence of a Go
+      error) + `cmd/outbox-relay` (2s ticker) against moto EventBridge
+- [x] `cmd/hold-reaper` (3s ticker) — active release, scanning `event_seats_expiry_idx`; reuses
+      `inventory.ReleaseHold` so it gets the same idempotency and outbox behavior every other caller gets
+- [x] **Verify:** passive expiry survives with the reaper OFF; the reaper, once on, sweeps every
+      already-expired hold and produces exactly the right outbox trail. Real output below.
+
+Deep-dive.md §2's 8 mandatory hold-expiry side effects, mapped to what actually exists after this phase:
+
+| Side effect | Where it lives |
+|---|---|
+| 1 seat AVAILABLE | the CAS predicate (passive, proven below) + reaper (active, proven below) |
+| 2 availability counts / 3 seat-map cache | Phase 7 (projector doesn't exist yet) |
+| 4 waiting room signalled | Phase 8 |
+| 5 checkout session EXPIRED | `GET /holds/{id}` already 410s once gone (Phase 3) |
+| 6 in-flight payment blocked | `ExtendHold`'s rowcount check (Phase 3); saga itself is Phase 6 |
+| 7 analytics `hold_expired` | `holds_audit` (Phase 3) + `domain_events` (this phase) |
+| 8 idempotency key expired | Phase 6 (`idempotency_keys` doesn't exist yet) |
+
+**Verification (real output, 2026-09-14):**
+```
+$ HOLD_TTL_SECONDS=10 go run ./cmd/server &   # reaper NOT running
+$ curl -X POST ... -d '{"seatOrdinals":[700]}' localhost:8080/api/v1/events/1/holds
+{"holdId":"958da1a1-...","fenceTokens":{"701":"1"},"expiresAt":"...+10s", ...}
+
+$ sleep 15   # past the 10s TTL, reaper still not running
+$ psql -c "SELECT status, hold_expires_at < now() FROM event_seats WHERE event_id=1 AND seat_id=701"
+ status | is_expired
+      1 | t                          -- still HELD in the DB row; nothing has touched it
+
+$ curl -X POST ... -d '{"seatOrdinals":[700]}' localhost:8080/api/v1/events/1/holds   # a FRESH hold
+{"holdId":"50e67088-...","fenceTokens":{"701":"2"}, ...}   -- SUCCEEDS, fence bumped 1->2
+                                                              -- PASSIVE EXPIRY ALONE, reaper never ran
+
+$ go run ./cmd/hold-reaper &     # now start it
+$ go run ./cmd/outbox-relay &
+hold-reaper: released expired hold 50e67088-... (event 1, 1 seat(s))
+              # + ~90 more — every OTHER already-expired hold accumulated across this
+              # session's earlier phases' testing got swept in the same tick, a real
+              # bulk-cleanup demonstration, not a cherry-picked single case
+outbox-relay: published 25 event(s)   [x7 ticks, draining the backlog]
+
+$ psql -c "SELECT status, hold_id FROM event_seats WHERE event_id=1 AND seat_id=701"
+ status | hold_id
+      0 |                            -- AVAILABLE, released
+
+$ psql -c "SELECT event_type, published_at IS NOT NULL FROM domain_events WHERE aggregate_id='1:701' ORDER BY created_at"
+ event_type     | published
+ seat.held      | t
+ seat.held      | t
+ seat.released  | t                  -- the reaper's release produced exactly one row, and it published
+
+$ psql -c "SELECT count(*) FROM event_seats WHERE status IN (1,3) AND hold_expires_at < now()"
+ count
+     0                                -- reaper caught up completely
+$ sleep 4 && tail reaper.log          -- no new lines: idempotent, stays quiet once nothing is expired
+```
 
 ## Phase 6 — Payment saga, idempotency, reconciler + checkout page
 - [ ] Migrations 0004/0005 (`orders`/`payments`/`refunds`/`order_saga_steps`, `idempotency_keys`)

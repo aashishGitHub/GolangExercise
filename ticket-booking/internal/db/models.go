@@ -9,6 +9,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type DomainEvent struct {
+	EventID       uuid.UUID          `json:"eventId"`
+	AggregateID   string             `json:"aggregateId"`
+	EventType     string             `json:"eventType"`
+	SchemaVersion int32              `json:"schemaVersion"`
+	Payload       []byte             `json:"payload"`
+	PublishedAt   pgtype.Timestamptz `json:"publishedAt"`
+	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
+}
+
 type Event struct {
 	EventID       int64              `json:"eventId"`
 	VenueID       int64              `json:"venueId"`
@@ -56,6 +66,12 @@ type HoldsAudit struct {
 	ExpiresAt  pgtype.Timestamptz `json:"expiresAt"`
 	LatencyMs  pgtype.Int4        `json:"latencyMs"`
 	CreatedAt  pgtype.Timestamptz `json:"createdAt"`
+}
+
+type ProcessedEvent struct {
+	EventID      uuid.UUID          `json:"eventId"`
+	ConsumerName string             `json:"consumerName"`
+	ProcessedAt  pgtype.Timestamptz `json:"processedAt"`
 }
 
 type Seat struct {

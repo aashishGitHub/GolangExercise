@@ -68,37 +68,13 @@ func TestAcquireHold_EmptySeatListRejected(t *testing.T) {
 	}
 }
 
-func TestReleaseHold_RowcountZeroIsSuccessNotError(t *testing.T) {
-	svc, q := newTestService(t)
-	holdID := uuid.New()
-
-	// Simulate "already gone" — the DB matches zero rows. ReleaseHold must
-	// still return nil, not an error (docs/plan.md: idempotent by construction).
-	q.EXPECT().
-		ReleaseHold(gomock.Any(), gomock.Any()).
-		Return(int64(0), nil)
-	q.EXPECT().
-		InsertHoldsAudit(gomock.Any(), gomock.Any()).
-		Return(nil)
-
-	if err := svc.ReleaseHold(context.Background(), 1, []int64{5}, holdID, "user-1"); err != nil {
-		t.Fatalf("ReleaseHold with rowcount 0: err = %v, want nil", err)
-	}
-}
-
-func TestReleaseHold_PropagatesRealDBErrors(t *testing.T) {
-	svc, q := newTestService(t)
-	wantErr := errors.New("connection reset")
-
-	q.EXPECT().
-		ReleaseHold(gomock.Any(), gomock.Any()).
-		Return(int64(0), wantErr)
-
-	err := svc.ReleaseHold(context.Background(), 1, []int64{5}, uuid.New(), "user-1")
-	if err == nil || !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v, want wrapping %v", err, wantErr)
-	}
-}
+// ReleaseHold's rowcount-zero-is-success and DB-error-propagation behavior
+// used to be covered here with a mocked Querier, but ReleaseHold now opens
+// its own transaction (db.New(tx), not the injected Querier) so the outbox
+// write shares the CAS's fate — the same reason AcquireHold/ConfirmSeats
+// were never mockable this way either. That coverage now lives in
+// integration_test.go's TestReleaseHold_IdempotentOnAlreadyGoneHold,
+// against a real Postgres transaction instead of a mock.
 
 func TestExtendHold_ShortRowcountReturnsErrHoldExpired(t *testing.T) {
 	svc, q := newTestService(t)
