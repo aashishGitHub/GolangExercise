@@ -284,10 +284,23 @@ func (h *Hub) pumpRedis(ctx context.Context, eventID int64, sub *eventSub) {
 	}
 }
 
+// writeLoop deliberately never closes c.send: pumpRedis (a different
+// goroutine, fanning out to potentially many connections under sub.mu) may
+// still be sending to it at the exact moment writeLoop decides to stop —
+// closing a channel a concurrent sender might still write to is a
+// send-on-closed-channel panic waiting to happen, and it happened here
+// during Phase 10's load harness run (the ~1% chaos disconnect racing
+// pumpRedis's fan-out, crashing the whole server — a real bug the load
+// test caught, not a unit test). Instead, every exit path below closes
+// the ACTUAL websocket immediately, which unblocks readLoop's
+// ReadMessage() right away (rather than waiting out the full idle
+// timeout), and readLoop's own return triggers ServeWS's deferred
+// unsubscribe — the one place sub.conns actually drops this connection,
+// after which pumpRedis simply stops seeing it. c.send itself is left to
+// the garbage collector once nothing references it anymore.
 func (h *Hub) writeLoop(c *conn) {
 	pingTicker := time.NewTicker(pingEvery)
 	defer pingTicker.Stop()
-	defer close(c.send)
 
 	for {
 		select {
@@ -295,14 +308,13 @@ func (h *Hub) writeLoop(c *conn) {
 			return
 		case <-pingTicker.C:
 			if err := c.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+				_ = c.ws.Close()
 				return
 			}
-		case frame, ok := <-c.send:
-			if !ok {
-				return
-			}
+		case frame := <-c.send:
 			if chaosDisconnect() {
 				log.Printf("wshub: chaos-disconnecting conn %s (~1%% fidelity patch, forces client resync)", c.connID)
+				_ = c.ws.Close()
 				return
 			}
 			if len(frame) > FrameSizeCap {
@@ -310,6 +322,7 @@ func (h *Hub) writeLoop(c *conn) {
 				continue
 			}
 			if err := c.ws.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+				_ = c.ws.Close()
 				return
 			}
 			if f, err := wsproto.Decode(frame); err == nil {

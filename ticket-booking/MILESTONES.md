@@ -877,9 +877,82 @@ itself is real and the server-side verification is identical either way. `nonce`
 carried but not checked against a single-use store (documented in `token.go`, same scope cut as the
 waiting room's admission tokens).
 
-## Phase 10 — Load harness + measured numbers (additive)
-- [ ] `scripts/loadtest` extended: arrival ramp, contention control, full journey, CSV output
-- [ ] **Verify:** one canonical scenario's real numbers pasted, double-ticket query returns 0 rows
+## Phase 10 — Load harness + measured numbers (additive) ✅ 2026-09-14
+- [x] `scripts/loadtest` — built fresh, not "extended": no earlier phase had created it yet despite
+      the plan doc referring to it as pre-existing (a real plan/reality drift, noted honestly). Drives
+      the FULL real journey over real HTTP: provisions a reused pool of real cognito-local identities,
+      then browse→queue→hold→order→poll-to-TICKETED, concurrently, with a staggered ramp-up and a
+      configurable contention mode (`uniform` across all 30,000 seats, or `hot` — every worker races
+      the SAME seat ordinal). Also runs one real `/ws` client for the whole run and measures delta
+      lag: time from a worker's `POST /holds` to that ordinal's delta actually arriving.
+- [x] CSV output per journey (seq, outcome, hold/order/total latency) plus a printed summary: hold
+      p50/p95/p99, conflict rate, hold→purchase conversion, WS delta lag p50/p95/p99, saga
+      compensation count (`order_saga_steps` queried directly), and the duplicate-live-ticket
+      invariant query from `docs/plan.md` verbatim.
+- [x] **Verify:** two canonical scenarios (uniform, hot) run against the real live stack, real numbers
+      pasted below, duplicate-ticket query 0 rows both times.
+
+**A real, load-triggered production bug found and fixed — the actual point of Phase 10.** The FIRST
+run of the uniform scenario crashed `cmd/server` outright 11 seconds in:
+```
+panic: send on closed channel
+goroutine ... ticketing/internal/wshub.(*Hub).pumpRedis(...) .../wshub.go:277
+```
+Root cause: `internal/wshub`'s `writeLoop` (Phase 7) closed `c.send` in a `defer` when it returned —
+including on the ~1% chaos-disconnect path. `pumpRedis`, a SEPARATE goroutine fanning out live deltas
+to every connection under `sub.mu`, could be mid-send to that exact channel at the exact moment
+`writeLoop` closed it — sending on a channel another goroutine just closed panics, and it did, under
+real concurrent load, killing the whole process (every other connection, every in-flight request, all
+of it — a single WS connection's chaos-disconnect took down the entire server). Phase 7's own
+verification never caught this: it used one WS client at a time, never enough concurrent connections
+for the race window to matter. **This is exactly what a load harness is for** — Phase 10 existing
+`scripts/loadtest` found a bug three phases' worth of feature work had shipped with.
+
+**Fix:** `writeLoop` no longer closes `c.send` at all — a channel's producer-side lifecycle shouldn't
+be torn down by one of its consumers while another goroutine might still be sending to it. Every exit
+path (chaos disconnect, ping failure, write failure) now closes the ACTUAL websocket immediately
+instead, which unblocks `readLoop`'s `ReadMessage()` right away (rather than waiting out the full
+10-minute idle timeout) and triggers `ServeWS`'s deferred `unsubscribe` — the one place a connection
+actually leaves `sub.conns`, after which `pumpRedis` simply stops seeing it. Re-ran both scenarios
+after the fix; the server survived the full duration of both, verified live (`ps aux` mid-run) and via
+a clean full `make test-integration` pass afterward.
+
+**Verification (real output, 2026-09-14, against the live stack, event 1's real 30,000-seat venue):**
+```
+$ scripts/loadtest -event=1 -workers=20 -users=20 -duration=20s -ramp-up=5s -contention=uniform \
+    -pool-id=local_5rBK5fNU -client-id=33l5kpkcx5pjp7s55ubre9psc -csv=loadtest-uniform.csv
+
+=== scripts/loadtest report — measured on dev hardware; a relative regression baseline, not a
+    production capacity claim ===
+total journeys:        2557
+hold p50/p95/p99 (ms): 2.75 / 5.19 / 8.38
+conflict rate:         14.2% (364/2557 SEAT_TAKEN)
+hold->purchase conv:   85.8% (2193/2557 TICKETED)
+WS delta lag p50/p95/p99 (ms): 332.90 / 494.18 / 498.14 (n=29)
+saga compensation count: 0
+duplicate live tickets for one seat: 0 rows (must be 0)
+
+$ scripts/loadtest -event=1 -workers=20 -users=20 -duration=15s -ramp-up=3s -contention=hot \
+    -hot-ordinal=3178 -pool-id=local_5rBK5fNU -client-id=33l5kpkcx5pjp7s55ubre9psc -csv=loadtest-hot.csv
+
+=== scripts/loadtest report — measured on dev hardware; a relative regression baseline, not a
+    production capacity claim ===
+total journeys:        49735
+hold p50/p95/p99 (ms): 3.13 / 4.02 / 4.64
+conflict rate:         100.0% (49734/49735 SEAT_TAKEN)   # exactly one winner, real numbers, same
+hold->purchase conv:   0.0% (1/49735 TICKETED)             # thesis Phase 3's race tests proved —
+duplicate live tickets for one seat: 0 rows (must be 0)    # now proven again under real HTTP load
+```
+
+**Reading these numbers honestly:** the uniform scenario's 20 workers reused only 20 real identities
+(cognito-local admin-user-creation latency makes thousands of distinct per-arrival identities
+impractical locally — the same scoping decision Phase 8's `queue-loadtest` made, and for the same
+reason: this measures the seat-contention/saga machinery under real concurrency, not identity-creation
+throughput, which is a distinct, separately-provable claim this harness doesn't make). The hot
+scenario's 49,735 journeys in 15s is almost entirely cheap Redis-fast-path 409 rejections
+(~0.2ms each, docs/plan.md's own estimate) — consistent with the measured hold p99 staying under 5ms
+even at that volume. WS delta lag's ~500ms ceiling across both runs is real and worth a follow-up
+measurement in a later session (not yet root-caused) rather than a number to over-interpret today.
 
 ## Phase 11 — IaC completion + Lambda twins (additive)
 - [ ] Remaining TF modules (`compute`, `api`, `websocket`, `eventing`, `waf`, `observability`, gated
