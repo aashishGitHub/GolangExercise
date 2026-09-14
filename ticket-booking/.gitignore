@@ -33,3 +33,4 @@ infra/terraform/modules/*/build/
 /saga-worker-lambda
 /reminder-scheduler
 /reminder-scheduler-lambda
+/dynamo-spike

@@ -1046,9 +1046,67 @@ review-triggered one:** `go get github.com/aws/aws-lambda-go` pulled in a depend
 `golang:1.26.x-alpine` Docker image's mere existence was noted but the local binary was still 1.25.6.
 It's 1.26 now, for real, not just in a container image.
 
-## Phase 12 — DynamoDB comparison spike (non-blocking, not dual-maintained)
-- [ ] `cmd/dynamo-spike` against `amazon/dynamodb-local`
-- [ ] **Verify:** same load scenario on both paths, committed comparison table + conclusion
+## Phase 12 — DynamoDB comparison spike (non-blocking, not dual-maintained) ✅ 2026-09-14
+- [x] `cmd/dynamo-spike` against real `amazon/dynamodb-local` (2.5.4) — a standalone `cmd/*` package,
+      never `internal/`, and never imported by `cmd/server` or any other production binary. Implements
+      `docs/script.md`'s model for real: single-seat `UpdateItem` with a read-time-expiry condition
+      expression, multi-seat `TransactWriteItems` with jittered-backoff retry on throttling (never on
+      a real `ConditionalCheckFailed`), and a `hold_id`-conditioned confirm.
+- [x] The exact same race-test shape as Phase 3's `TestAcquireHold_ExactlyOneWinnerUnderRace` — 200
+      goroutines, one barrier, 20 rounds — run against DynamoDB instead of Postgres.
+- [x] Load scenarios reproducing Phase 10's uniform-vs-hot contention SHAPE, driven directly against
+      the hold functions (not through HTTP — this phase is explicitly not wired into `cmd/server`, so
+      reusing `scripts/loadtest`'s HTTP harness verbatim isn't possible by design; documented as a
+      methodology difference, not glossed over).
+- [x] `docs/dynamodb-comparison.md`: the real p50/p95/p99 + conflict-rate table, and the required
+      conclusion — which properties transfer (single-item atomicity, passive read-time expiry, a
+      `hold_id`-only zombie-confirm guard with no fence-token equivalent needed) and which don't
+      (multi-item atomicity costs real measured latency — ~4x in this harness — 2x WCU per
+      `docs/script.md`; the transactional-outbox pattern has no free DynamoDB equivalent, Streams +
+      a separate consumer is the real cost).
+- [x] **Verify:** 20/20 race rounds exactly one winner; 4 real load scenarios with real numbers;
+      `TransactWriteItems`' atomicity independently confirmed post-run (all 4 hot-contended seats
+      share the exact same winning `hold_id`, queried directly from the table).
+
+**Verification (real output, 2026-09-14, against real `amazon/dynamodb-local`):**
+```
+$ dynamo-spike -mode=race
+race round 1/20: wins=1 conflicts=199 [PASS]
+...
+race round 20/20: wins=1 conflicts=199 [PASS]
+race test: 20/20 rounds passed — exactly one winner every time, DynamoDB's native conditional write
+
+$ dynamo-spike -mode=loadtest -contention=uniform -multi-seat=1 -workers=50 -duration=15s -seats=30000
+total attempts:  78590
+p50/p95/p99 (ms): 11.40 / 15.31 / 17.54
+conflict rate:   64.6% (50732/78590)
+
+$ dynamo-spike -mode=loadtest -contention=hot -multi-seat=1 -workers=50 -duration=15s -seats=30000
+total attempts:  97149
+p50/p95/p99 (ms): 9.78 / 11.55 / 12.78
+conflict rate:   100.0% (97148/97149)          # exactly one winner, same thesis, different engine
+
+$ dynamo-spike -mode=loadtest -contention=uniform -multi-seat=4 -workers=50 -duration=15s -seats=30000
+total attempts:  15926
+p50/p95/p99 (ms): 46.82 / 57.98 / 66.00         # ~4x the single-item p50 — the measured cost of
+conflict rate:   68.9% (10968/15926)             # TransactWriteItems' cross-seat atomicity
+
+$ dynamo-spike -mode=loadtest -contention=hot -multi-seat=4 -workers=50 -duration=15s -seats=30000
+total attempts:  21918
+p50/p95/p99 (ms): 35.19 / 39.20 / 56.48
+conflict rate:   100.0% (21917/21918)
+
+# --- independent post-run confirmation: TransactWriteItems' atomicity really held ---
+$ aws dynamodb get-item ... --key seat_id=0   ->  hold_id: 798d0413-...  status: HELD
+$ aws dynamodb get-item ... --key seat_id=1   ->  hold_id: 798d0413-...  status: HELD   (SAME hold_id)
+$ aws dynamodb get-item ... --key seat_id=2   ->  hold_id: 798d0413-...  status: HELD   (SAME hold_id)
+$ aws dynamodb get-item ... --key seat_id=3   ->  hold_id: 798d0413-...  status: HELD   (SAME hold_id)
+```
+
+**Not evaluated in this phase, honestly scoped:** the DynamoDB WS-connection-registry alternative
+`docs/plan.md` decision #7 names (genuinely stronger here than the sibling project's equivalent
+decision, per that decision's own text) — proving it would need a second, separate connection-churn
+harness this phase's time budget didn't reach. See `docs/dynamodb-comparison.md`'s closing section.
 
 ---
 
