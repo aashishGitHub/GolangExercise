@@ -17,12 +17,15 @@ interface RequestOptions {
   method?: string
   body?: unknown
   token?: string | null
+  /** Extra headers beyond Authorization/Content-Type — e.g. the waiting
+   * room's X-Admission-Token on POST .../holds. */
+  headers?: Record<string, string>
 }
 
 /** Thin fetch wrapper: bearer token, JSON in/out, typed errors matching
  * the backend's {code,message} error shape (docs/plan.md API contract). */
 export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...opts.headers }
   if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`
 
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -34,10 +37,23 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   if (res.status === 204) return undefined as T
 
   const contentType = res.headers.get('content-type') ?? ''
-  const payload = contentType.includes('application/json') ? await res.json() : await res.arrayBuffer()
+  const isJson = contentType.includes('application/json')
+  const payload = isJson ? await res.json() : await res.arrayBuffer()
 
   if (!res.ok) {
-    const body = payload as { code?: string; message?: string }
+    // Some handlers (e.g. RequireAdmission's http.Error calls) send a JSON
+    // body mislabeled as text/plain — try to parse it anyway before
+    // falling back to a bare status text, so `code` still comes through.
+    let body: { code?: string; message?: string } = {}
+    if (isJson) {
+      body = payload as { code?: string; message?: string }
+    } else {
+      try {
+        body = JSON.parse(new TextDecoder().decode(payload as ArrayBuffer))
+      } catch {
+        // not JSON either — body stays {}, message falls back to statusText below
+      }
+    }
     throw new ApiError(res.status, body.code ?? 'unknown', body.message ?? res.statusText, body)
   }
   return payload as T

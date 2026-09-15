@@ -1,64 +1,88 @@
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import './amplifyConfig'
+import { AuthPanel } from './auth/AuthPanel'
 import { useAuth } from './auth/useAuth'
 import { EventPage } from './EventPage'
 
-const CODE = '123456' // cognito-local's fixed confirmation code
-
 export function App() {
   const auth = useAuth()
-  const [mode, setMode] = useState<'signUp' | 'confirm' | 'signIn'>('signUp')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [code, setCode] = useState(CODE)
-  const [signedIn, setSignedIn] = useState(false)
+  const [authPanelOpen, setAuthPanelOpen] = useState(false)
+  const [authPanelMode, setAuthPanelMode] = useState<'signIn' | 'signUp'>('signIn')
+  // Set by EventPage via onAuthRequired when a signed-out visitor tries to
+  // reserve seats: the seat selection lives in EventPage's own state and is
+  // untouched by the sign-in detour, so re-invoking the same handler here
+  // resumes exactly where the visitor left off.
+  const pendingRetryRef = useRef<(() => void) | null>(null)
 
-  if (!signedIn) {
-    return (
-      <div>
-        <h1>Ticketing</h1>
-        {mode === 'signUp' && (
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault()
-              await auth.register(username, password)
-              setMode('confirm')
-            }}
-          >
-            <input aria-label="email" value={username} onChange={(e) => setUsername(e.target.value)} />
-            <input aria-label="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button type="submit">Sign up</button>
-          </form>
-        )}
-        {mode === 'confirm' && (
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault()
-              await auth.confirm(username, code)
-              setMode('signIn')
-            }}
-          >
-            <input aria-label="confirmation code" value={code} onChange={(e) => setCode(e.target.value)} />
-            <button type="submit">Confirm</button>
-          </form>
-        )}
-        {mode === 'signIn' && (
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault()
-              await auth.login(username, password)
-              setSignedIn(true)
-            }}
-          >
-            <input aria-label="email" value={username} onChange={(e) => setUsername(e.target.value)} />
-            <input aria-label="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button type="submit">Log in</button>
-          </form>
-        )}
-        {auth.error && <p role="alert">{auth.error}</p>}
-      </div>
-    )
+  const openAuthPanel = useCallback(
+    (mode: 'signIn' | 'signUp') => {
+      auth.clearError()
+      setAuthPanelMode(mode)
+      setAuthPanelOpen(true)
+    },
+    [auth],
+  )
+
+  const closeAuthPanel = useCallback(() => {
+    setAuthPanelOpen(false)
+    pendingRetryRef.current = null
+    auth.clearError()
+  }, [auth])
+
+  const requireAuth = useCallback(
+    (retry: () => void) => {
+      pendingRetryRef.current = retry
+      auth.clearError()
+      setAuthPanelMode('signIn')
+      setAuthPanelOpen(true)
+    },
+    [auth],
+  )
+
+  const handleAuthenticated = useCallback(() => {
+    setAuthPanelOpen(false)
+    const retry = pendingRetryRef.current
+    pendingRetryRef.current = null
+    retry?.()
+  }, [])
+
+  if (auth.status === 'loading') {
+    return <p>Loading…</p>
   }
 
-  return <EventPage eventId={1} idToken={auth.idToken} />
+  return (
+    <div>
+      <header>
+        <h1>Ticketing</h1>
+        {auth.status === 'authed' ? (
+          <p>
+            Signed in as {auth.email}{' '}
+            <button type="button" onClick={() => auth.logout()}>
+              Sign out
+            </button>
+          </p>
+        ) : (
+          !authPanelOpen && (
+            <p>
+              <button type="button" onClick={() => openAuthPanel('signIn')}>
+                Sign in
+              </button>{' '}
+              <button type="button" onClick={() => openAuthPanel('signUp')}>
+                Create account
+              </button>
+            </p>
+          )
+        )}
+      </header>
+
+      {authPanelOpen && auth.status !== 'authed' && (
+        <AuthPanel auth={auth} initialMode={authPanelMode} onAuthenticated={handleAuthenticated} onCancel={closeAuthPanel} />
+      )}
+
+      {/* Browsing and the seat map never require an account — only the API's
+       * hold/order routes do (internal/httpapi/router.go). EventPage gates
+       * just the reserve actions via onAuthRequired. */}
+      <EventPage eventId={1} idToken={auth.idToken} isAuthed={auth.status === 'authed'} onAuthRequired={requireAuth} />
+    </div>
+  )
 }

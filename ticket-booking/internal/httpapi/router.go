@@ -39,9 +39,14 @@ func NewRouter(verifier *auth.Verifier, q db.Querier, inv *inventory.Service, or
 	// (docs/plan.md "CORS" — Phase 11); local dev keeps this chi middleware
 	// since there's no API Gateway locally.
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173"},
-		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		AllowedOrigins: []string{"http://localhost:5173"},
+		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
+		// X-Admission-Token: RequireAdmission gates every POST .../holds
+		// unconditionally (internal/waitingroom/middleware.go), not just
+		// under real contention, so the browser client always sends it —
+		// without it in AllowedHeaders the CORS preflight itself fails and
+		// no hold request ever reaches the handler.
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Admission-Token"},
 		AllowCredentials: false,
 	}))
 

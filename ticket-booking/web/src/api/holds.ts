@@ -22,8 +22,17 @@ export interface ConflictBody {
   conflicts: number[]
 }
 
-export function createHold(eventId: number, seatOrdinals: number[], token: string): Promise<Hold> {
-  return apiFetch(`/api/v1/events/${eventId}/holds`, { method: 'POST', token, body: { seatOrdinals } })
+// Every hold request is gated behind the waiting room (RequireAdmission
+// middleware, internal/waitingroom/middleware.go — unconditional, not just
+// under real load) and needs a fresh X-Admission-Token from
+// api/queue.ts's waitForAdmission.
+export function createHold(eventId: number, seatOrdinals: number[], token: string, admissionToken: string): Promise<Hold> {
+  return apiFetch(`/api/v1/events/${eventId}/holds`, {
+    method: 'POST',
+    token,
+    headers: { 'X-Admission-Token': admissionToken },
+    body: { seatOrdinals },
+  })
 }
 
 export function bestAvailable(
@@ -31,10 +40,12 @@ export function bestAvailable(
   quantity: number,
   maxPriceCents: number,
   token: string,
+  admissionToken: string,
 ): Promise<Hold> {
   return apiFetch(`/api/v1/events/${eventId}/holds`, {
     method: 'POST',
     token,
+    headers: { 'X-Admission-Token': admissionToken },
     body: { quantity, maxPriceCents, bestAvailable: true },
   })
 }

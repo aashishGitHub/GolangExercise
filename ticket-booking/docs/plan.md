@@ -649,6 +649,74 @@ DynamoDB. The conclusion must state which properties transfer and which don't (s
 free in Dynamo; multi-item costs 2× WCU and fails hard under contention; Postgres gives you the outbox in
 the *same* transaction, Dynamo needs Streams). Nothing from this phase wires into `cmd/server`.
 
+### Phase 13 — Frontend UX repair *(additive; scoped to `web/`, no new screens)*
+
+**Why:** `web/` is a single commit (Phase 4) and nothing from Phases 6–8 ever reached it. Opening the
+app shows a bare "Ticketing" heading and a Sign-up form with no path to Sign-in — a returning user hits
+`UsernameExistsException` and is structurally stuck, because `App.tsx`'s auth state machine defaults to
+`signUp` and only ever transitions `signUp → confirm → signIn`, and `signedIn` is local `useState` with
+no session restore, so every reload logs the user out regardless. This phase fixes usability —
+information architecture, flow, state coverage, and copy — **not visual design**; CSS is explicitly out
+of scope for this phase.
+
+**Architecture verdict:** the model layer (`seatIndex`/`bitset`/`quadtree`, the a11y tree as a peer
+projection of the same arrays, the server-authoritative `HoldTimer`) is correctly built and unit-tested.
+What's missing is the application shell around it: `react-router-dom` and `zustand` are installed
+(`package.json`) but **never imported anywhere in `src/`**; `ApiError.code` is captured by `api/client.ts`
+but discarded by every caller (`setError(String(e))`); and `EventPage.tsx`'s loading state and error state
+are conflated, so a load failure hangs on "Loading event…" forever with the real cause visible only to
+screen readers (the error region is `className="visually-hidden"`).
+
+**Scope, confirmed with the user:**
+- Repair what exists; no new screens (no checkout, ticket/QR, or waiting-room pages — those stay the
+  documented Phase 6/8 frontend gaps, deferred).
+- Browse without an account; authenticate only at the point of reserving a seat — `GET /events`,
+  `/events/{id}`, `/availability`, `/pricing`, and the layout are already public routes in `router.go`,
+  only `POST .../holds` requires a JWT, so gating the whole app behind sign-up is stricter than the API
+  and worse UX.
+- **Correction made during implementation:** `RequireAdmission` (`internal/waitingroom/middleware.go`)
+  gates every `POST .../holds` **unconditionally** — it is not specific to real on-sale contention, so
+  reserving seats was never actually optional-waiting-room-only as first assessed. The frontend must
+  call `POST /events/{id}/queue` before every hold and send the resulting token as `X-Admission-Token`,
+  which in turn requires widening `router.go`'s CORS `AllowedHeaders` (was missing `X-Admission-Token`,
+  so the browser preflight for every hold request failed closed) — the one backend change this phase
+  needed after all, made surgically rather than speculatively once the gap was confirmed to actually
+  block the feature. `Idempotency-Key` and the order response's missing `ticketIds` remain deferred —
+  they block the checkout/ticket screens, which stay out of scope here.
+
+**Work:**
+1. **Auth** (`App.tsx`, `auth/useAuth.ts`): restore session on mount instead of local `useState`; default
+   to Sign-in with a working link to Create-account and back; real `<label>`s, `type`, `autoComplete` on
+   every input; disable-on-submit; map Cognito exceptions to plain copy — `UsernameExistsException`
+   specifically offers "Sign in instead" with the email preserved; surface signed-in identity and a
+   working Sign-out (the existing `logout()` is never called today).
+2. **Browse-then-auth** (`App.tsx`, `EventPage.tsx`): render the event page unconditionally; gate only
+   the reserve/best-available actions on auth, preserving the in-progress seat selection through
+   sign-in and auto-retrying the action once signed in.
+3. **Seat selection UX** (`EventPage.tsx`): split `loading`/`ready`/`error` explicitly (today's `.catch`
+   sets only `error`, never resolves the loading state) with a visible retry; add a visible error region
+   alongside the existing `aria-live` one; show a selection summary with per-seat price and subtotal; make
+   the silent 8-seat cap (`toggleSeat`) explain itself; replace the hardcoded "2 seats" best-available with
+   a quantity picker; reconcile `selection` against each 5s availability poll so a sold seat is dropped and
+   announced instead of only failing at hold time.
+4. **Error taxonomy** (new `api/errorCopy.ts`): map `ApiError.code` — `SEAT_TAKEN`, `HOLD_EXPIRED`,
+   `no_contiguous_seats`, `too_many_seats`, `gone`, `forbidden`, `unauthorized`, `internal`, network
+   failure — to plain-language copy; `SEAT_TAKEN` must read as normal/recoverable, not a crash, since it's
+   the dominant non-2xx during an on-sale (decision already stated in the API contract above).
+5. **Hold lifecycle** (`EventPage.tsx`, `hold/HoldTimer.tsx`): handle expiry by asking the server
+   (`getHold`) rather than leaving a dead timer on screen, per "the client never decides the hold is dead"
+   above; label the timer visibly; add a warning state under 2:00.
+
+**Verify:** real running stack (`docker compose up -d`, `make dev-server`, `npm run dev`). Sign in, hard
+reload → still signed in. Signed-out load → seat map renders and is keyboard-navigable; attempting to
+reserve prompts sign-in, preserves selection, auto-completes the reserve after sign-in. Stop `cmd/server`,
+reload → visible error + working retry, not a permanent "Loading event…"; restart, retry → recovers.
+Hold a seat via `curl` under a second identity, then attempt it in the UI → named seats deselected, plain
+message, zero console errors. Run with `HOLD_TTL=20`, reserve, let it expire → UI asks the server, clears
+the hold, explains. `npm test` (37 vitest model tests) and `npm run e2e` (`e2e/hold-flow.spec.ts`, which
+asserts zero console errors and drives the a11y tree keyboard-only) both stay green against the new
+labels/copy.
+
 ---
 
 ## Frontend verification standard
