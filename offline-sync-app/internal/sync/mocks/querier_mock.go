@@ -42,6 +42,36 @@ func (m *MockQuerier) EXPECT() *MockQuerierMockRecorder {
 	return m.recorder
 }
 
+// AdvanceLinkVersion mocks base method.
+func (m *MockQuerier) AdvanceLinkVersion(ctx context.Context, arg db.AdvanceLinkVersionParams) (db.ExternalIDMap, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AdvanceLinkVersion", ctx, arg)
+	ret0, _ := ret[0].(db.ExternalIDMap)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AdvanceLinkVersion indicates an expected call of AdvanceLinkVersion.
+func (mr *MockQuerierMockRecorder) AdvanceLinkVersion(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvanceLinkVersion", reflect.TypeOf((*MockQuerier)(nil).AdvanceLinkVersion), ctx, arg)
+}
+
+// ClaimInboxRow mocks base method.
+func (m *MockQuerier) ClaimInboxRow(ctx context.Context, arg db.ClaimInboxRowParams) (db.WebhookInbox, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClaimInboxRow", ctx, arg)
+	ret0, _ := ret[0].(db.WebhookInbox)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ClaimInboxRow indicates an expected call of ClaimInboxRow.
+func (mr *MockQuerierMockRecorder) ClaimInboxRow(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimInboxRow", reflect.TypeOf((*MockQuerier)(nil).ClaimInboxRow), ctx, arg)
+}
+
 // CountPhotosByConditionForLocation mocks base method.
 func (m *MockQuerier) CountPhotosByConditionForLocation(ctx context.Context, locationID uuid.UUID) ([]db.CountPhotosByConditionForLocationRow, error) {
 	m.ctrl.T.Helper()
@@ -84,6 +114,36 @@ func (m *MockQuerier) DeleteWSConnection(ctx context.Context, connectionID strin
 func (mr *MockQuerierMockRecorder) DeleteWSConnection(ctx, connectionID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteWSConnection", reflect.TypeOf((*MockQuerier)(nil).DeleteWSConnection), ctx, connectionID)
+}
+
+// GetExternalLink mocks base method.
+func (m *MockQuerier) GetExternalLink(ctx context.Context, arg db.GetExternalLinkParams) (db.ExternalIDMap, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExternalLink", ctx, arg)
+	ret0, _ := ret[0].(db.ExternalIDMap)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetExternalLink indicates an expected call of GetExternalLink.
+func (mr *MockQuerierMockRecorder) GetExternalLink(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExternalLink", reflect.TypeOf((*MockQuerier)(nil).GetExternalLink), ctx, arg)
+}
+
+// GetExternalLinkByInternal mocks base method.
+func (m *MockQuerier) GetExternalLinkByInternal(ctx context.Context, arg db.GetExternalLinkByInternalParams) (db.ExternalIDMap, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExternalLinkByInternal", ctx, arg)
+	ret0, _ := ret[0].(db.ExternalIDMap)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetExternalLinkByInternal indicates an expected call of GetExternalLinkByInternal.
+func (mr *MockQuerierMockRecorder) GetExternalLinkByInternal(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExternalLinkByInternal", reflect.TypeOf((*MockQuerier)(nil).GetExternalLinkByInternal), ctx, arg)
 }
 
 // GetLocation mocks base method.
@@ -146,6 +206,65 @@ func (mr *MockQuerierMockRecorder) GetSiteAssessment(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSiteAssessment", reflect.TypeOf((*MockQuerier)(nil).GetSiteAssessment), ctx, id)
 }
 
+// GetSyncPushed mocks base method.
+func (m *MockQuerier) GetSyncPushed(ctx context.Context, arg db.GetSyncPushedParams) (db.SyncPushed, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSyncPushed", ctx, arg)
+	ret0, _ := ret[0].(db.SyncPushed)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSyncPushed indicates an expected call of GetSyncPushed.
+func (mr *MockQuerierMockRecorder) GetSyncPushed(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncPushed", reflect.TypeOf((*MockQuerier)(nil).GetSyncPushed), ctx, arg)
+}
+
+// GetSyncState mocks base method.
+func (m *MockQuerier) GetSyncState(ctx context.Context, system string) (db.SyncState, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSyncState", ctx, system)
+	ret0, _ := ret[0].(db.SyncState)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSyncState indicates an expected call of GetSyncState.
+func (mr *MockQuerierMockRecorder) GetSyncState(ctx, system any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncState", reflect.TypeOf((*MockQuerier)(nil).GetSyncState), ctx, system)
+}
+
+// GetWorkItemForUpdate mocks base method.
+func (m *MockQuerier) GetWorkItemForUpdate(ctx context.Context, id uuid.UUID) (db.WorkItem, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWorkItemForUpdate", ctx, id)
+	ret0, _ := ret[0].(db.WorkItem)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetWorkItemForUpdate indicates an expected call of GetWorkItemForUpdate.
+func (mr *MockQuerierMockRecorder) GetWorkItemForUpdate(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWorkItemForUpdate", reflect.TypeOf((*MockQuerier)(nil).GetWorkItemForUpdate), ctx, id)
+}
+
+// InsertDeadLetter mocks base method.
+func (m *MockQuerier) InsertDeadLetter(ctx context.Context, arg db.InsertDeadLetterParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertDeadLetter", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertDeadLetter indicates an expected call of InsertDeadLetter.
+func (mr *MockQuerierMockRecorder) InsertDeadLetter(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertDeadLetter", reflect.TypeOf((*MockQuerier)(nil).InsertDeadLetter), ctx, arg)
+}
+
 // InsertDomainEvent mocks base method.
 func (m *MockQuerier) InsertDomainEvent(ctx context.Context, arg db.InsertDomainEventParams) (db.DomainEvent, error) {
 	m.ctrl.T.Helper()
@@ -159,6 +278,20 @@ func (m *MockQuerier) InsertDomainEvent(ctx context.Context, arg db.InsertDomain
 func (mr *MockQuerierMockRecorder) InsertDomainEvent(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertDomainEvent", reflect.TypeOf((*MockQuerier)(nil).InsertDomainEvent), ctx, arg)
+}
+
+// InsertExternalLink mocks base method.
+func (m *MockQuerier) InsertExternalLink(ctx context.Context, arg db.InsertExternalLinkParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertExternalLink", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertExternalLink indicates an expected call of InsertExternalLink.
+func (mr *MockQuerierMockRecorder) InsertExternalLink(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertExternalLink", reflect.TypeOf((*MockQuerier)(nil).InsertExternalLink), ctx, arg)
 }
 
 // InsertWSConnection mocks base method.
@@ -175,6 +308,21 @@ func (mr *MockQuerierMockRecorder) InsertWSConnection(ctx, arg any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertWSConnection", reflect.TypeOf((*MockQuerier)(nil).InsertWSConnection), ctx, arg)
 }
 
+// InsertWebhookInbox mocks base method.
+func (m *MockQuerier) InsertWebhookInbox(ctx context.Context, arg db.InsertWebhookInboxParams) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertWebhookInbox", ctx, arg)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// InsertWebhookInbox indicates an expected call of InsertWebhookInbox.
+func (mr *MockQuerierMockRecorder) InsertWebhookInbox(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertWebhookInbox", reflect.TypeOf((*MockQuerier)(nil).InsertWebhookInbox), ctx, arg)
+}
+
 // IsEventProcessed mocks base method.
 func (m *MockQuerier) IsEventProcessed(ctx context.Context, arg db.IsEventProcessedParams) (bool, error) {
 	m.ctrl.T.Helper()
@@ -188,6 +336,36 @@ func (m *MockQuerier) IsEventProcessed(ctx context.Context, arg db.IsEventProces
 func (mr *MockQuerierMockRecorder) IsEventProcessed(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsEventProcessed", reflect.TypeOf((*MockQuerier)(nil).IsEventProcessed), ctx, arg)
+}
+
+// ListDeadLetters mocks base method.
+func (m *MockQuerier) ListDeadLetters(ctx context.Context, system string) ([]db.SyncDeadLetter, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListDeadLetters", ctx, system)
+	ret0, _ := ret[0].([]db.SyncDeadLetter)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListDeadLetters indicates an expected call of ListDeadLetters.
+func (mr *MockQuerierMockRecorder) ListDeadLetters(ctx, system any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDeadLetters", reflect.TypeOf((*MockQuerier)(nil).ListDeadLetters), ctx, system)
+}
+
+// ListPendingInbox mocks base method.
+func (m *MockQuerier) ListPendingInbox(ctx context.Context, arg db.ListPendingInboxParams) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListPendingInbox", ctx, arg)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListPendingInbox indicates an expected call of ListPendingInbox.
+func (mr *MockQuerierMockRecorder) ListPendingInbox(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPendingInbox", reflect.TypeOf((*MockQuerier)(nil).ListPendingInbox), ctx, arg)
 }
 
 // ListPhotosBySite mocks base method.
@@ -293,6 +471,64 @@ func (mr *MockQuerierMockRecorder) MarkEventPublished(ctx, id any) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkEventPublished", reflect.TypeOf((*MockQuerier)(nil).MarkEventPublished), ctx, id)
 }
 
+// MarkInboxDead mocks base method.
+func (m *MockQuerier) MarkInboxDead(ctx context.Context, arg db.MarkInboxDeadParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkInboxDead", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkInboxDead indicates an expected call of MarkInboxDead.
+func (mr *MockQuerierMockRecorder) MarkInboxDead(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkInboxDead", reflect.TypeOf((*MockQuerier)(nil).MarkInboxDead), ctx, arg)
+}
+
+// MarkInboxProcessed mocks base method.
+func (m *MockQuerier) MarkInboxProcessed(ctx context.Context, arg db.MarkInboxProcessedParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkInboxProcessed", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkInboxProcessed indicates an expected call of MarkInboxProcessed.
+func (mr *MockQuerierMockRecorder) MarkInboxProcessed(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkInboxProcessed", reflect.TypeOf((*MockQuerier)(nil).MarkInboxProcessed), ctx, arg)
+}
+
+// RecordInboxFailure mocks base method.
+func (m *MockQuerier) RecordInboxFailure(ctx context.Context, arg db.RecordInboxFailureParams) (db.WebhookInbox, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordInboxFailure", ctx, arg)
+	ret0, _ := ret[0].(db.WebhookInbox)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RecordInboxFailure indicates an expected call of RecordInboxFailure.
+func (mr *MockQuerierMockRecorder) RecordInboxFailure(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordInboxFailure", reflect.TypeOf((*MockQuerier)(nil).RecordInboxFailure), ctx, arg)
+}
+
+// UpdateWorkItemNotes mocks base method.
+func (m *MockQuerier) UpdateWorkItemNotes(ctx context.Context, arg db.UpdateWorkItemNotesParams) (db.WorkItem, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateWorkItemNotes", ctx, arg)
+	ret0, _ := ret[0].(db.WorkItem)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateWorkItemNotes indicates an expected call of UpdateWorkItemNotes.
+func (mr *MockQuerierMockRecorder) UpdateWorkItemNotes(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateWorkItemNotes", reflect.TypeOf((*MockQuerier)(nil).UpdateWorkItemNotes), ctx, arg)
+}
+
 // UpsertLocation mocks base method.
 func (m *MockQuerier) UpsertLocation(ctx context.Context, arg db.UpsertLocationParams) (db.DisasterLocation, error) {
 	m.ctrl.T.Helper()
@@ -350,4 +586,47 @@ func (m *MockQuerier) UpsertSiteAssessment(ctx context.Context, arg db.UpsertSit
 func (mr *MockQuerierMockRecorder) UpsertSiteAssessment(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertSiteAssessment", reflect.TypeOf((*MockQuerier)(nil).UpsertSiteAssessment), ctx, arg)
+}
+
+// UpsertSyncPushed mocks base method.
+func (m *MockQuerier) UpsertSyncPushed(ctx context.Context, arg db.UpsertSyncPushedParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertSyncPushed", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpsertSyncPushed indicates an expected call of UpsertSyncPushed.
+func (mr *MockQuerierMockRecorder) UpsertSyncPushed(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertSyncPushed", reflect.TypeOf((*MockQuerier)(nil).UpsertSyncPushed), ctx, arg)
+}
+
+// UpsertSyncState mocks base method.
+func (m *MockQuerier) UpsertSyncState(ctx context.Context, arg db.UpsertSyncStateParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertSyncState", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpsertSyncState indicates an expected call of UpsertSyncState.
+func (mr *MockQuerierMockRecorder) UpsertSyncState(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertSyncState", reflect.TypeOf((*MockQuerier)(nil).UpsertSyncState), ctx, arg)
+}
+
+// UpsertWorkItem mocks base method.
+func (m *MockQuerier) UpsertWorkItem(ctx context.Context, arg db.UpsertWorkItemParams) (db.WorkItem, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertWorkItem", ctx, arg)
+	ret0, _ := ret[0].(db.WorkItem)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpsertWorkItem indicates an expected call of UpsertWorkItem.
+func (mr *MockQuerierMockRecorder) UpsertWorkItem(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertWorkItem", reflect.TypeOf((*MockQuerier)(nil).UpsertWorkItem), ctx, arg)
 }

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS disaster_locations_updated_at_id_idx;

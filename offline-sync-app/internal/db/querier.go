@@ -11,16 +11,35 @@ import (
 )
 
 type Querier interface {
+	// Atomic version gate: 0 rows (pgx.ErrNoRows) unless the incoming external
+	// version is strictly newer than the last applied one. Also row-locks the
+	// link until the surrounding transaction ends.
+	AdvanceLinkVersion(ctx context.Context, arg AdvanceLinkVersionParams) (ExternalIDMap, error)
+	ClaimInboxRow(ctx context.Context, arg ClaimInboxRowParams) (WebhookInbox, error)
 	CountPhotosByConditionForLocation(ctx context.Context, locationID uuid.UUID) ([]CountPhotosByConditionForLocationRow, error)
 	CountPhotosBySite(ctx context.Context, siteAssessmentID uuid.UUID) (int64, error)
 	DeleteWSConnection(ctx context.Context, connectionID string) error
+	GetExternalLink(ctx context.Context, arg GetExternalLinkParams) (ExternalIDMap, error)
+	GetExternalLinkByInternal(ctx context.Context, arg GetExternalLinkByInternalParams) (ExternalIDMap, error)
 	GetLocation(ctx context.Context, id uuid.UUID) (DisasterLocation, error)
 	GetLocationStats(ctx context.Context, locationID uuid.UUID) (LocationStat, error)
 	GetPhoto(ctx context.Context, id uuid.UUID) (Photo, error)
 	GetSiteAssessment(ctx context.Context, id uuid.UUID) (SiteAssessment, error)
+	GetSyncPushed(ctx context.Context, arg GetSyncPushedParams) (SyncPushed, error)
+	GetSyncState(ctx context.Context, system string) (SyncState, error)
+	GetWorkItemForUpdate(ctx context.Context, id uuid.UUID) (WorkItem, error)
+	InsertDeadLetter(ctx context.Context, arg InsertDeadLetterParams) error
 	InsertDomainEvent(ctx context.Context, arg InsertDomainEventParams) (DomainEvent, error)
+	// ===========================================================================
+	// Two-way sync: inbound webhooks + SaaS<->SaaS (internal/webhook, internal/twoway)
+	// ===========================================================================
+	InsertExternalLink(ctx context.Context, arg InsertExternalLinkParams) error
 	InsertWSConnection(ctx context.Context, arg InsertWSConnectionParams) error
+	// 1 row = first delivery, 0 rows = duplicate delivery id.
+	InsertWebhookInbox(ctx context.Context, arg InsertWebhookInboxParams) (int64, error)
 	IsEventProcessed(ctx context.Context, arg IsEventProcessedParams) (bool, error)
+	ListDeadLetters(ctx context.Context, system string) ([]SyncDeadLetter, error)
+	ListPendingInbox(ctx context.Context, arg ListPendingInboxParams) ([]string, error)
 	ListPhotosBySite(ctx context.Context, siteAssessmentID uuid.UUID) ([]Photo, error)
 	ListSiteAssessmentsByLocation(ctx context.Context, locationID uuid.UUID) ([]SiteAssessment, error)
 	// Idempotency lives here: an event already recorded in processed_events for
@@ -31,6 +50,10 @@ type Querier interface {
 	ListWSConnectionsByLocation(ctx context.Context, locationID uuid.UUID) ([]WsConnection, error)
 	MarkEventProcessed(ctx context.Context, arg MarkEventProcessedParams) error
 	MarkEventPublished(ctx context.Context, id uuid.UUID) error
+	MarkInboxDead(ctx context.Context, arg MarkInboxDeadParams) error
+	MarkInboxProcessed(ctx context.Context, arg MarkInboxProcessedParams) error
+	RecordInboxFailure(ctx context.Context, arg RecordInboxFailureParams) (WebhookInbox, error)
+	UpdateWorkItemNotes(ctx context.Context, arg UpdateWorkItemNotesParams) (WorkItem, error)
 	// Atomic LWW upsert: applies iff new, or existing row is strictly older.
 	// Returns 0 rows (pgx.ErrNoRows) when blocked — the service falls back to
 	// GetLocation to classify ignored-stale vs. conflict (equal timestamps).
@@ -46,6 +69,9 @@ type Querier interface {
 	UpsertPhoto(ctx context.Context, arg UpsertPhotoParams) (Photo, error)
 	// Same atomic LWW pattern as UpsertLocation.
 	UpsertSiteAssessment(ctx context.Context, arg UpsertSiteAssessmentParams) (SiteAssessment, error)
+	UpsertSyncPushed(ctx context.Context, arg UpsertSyncPushedParams) error
+	UpsertSyncState(ctx context.Context, arg UpsertSyncStateParams) error
+	UpsertWorkItem(ctx context.Context, arg UpsertWorkItemParams) (WorkItem, error)
 }
 
 var _ Querier = (*Queries)(nil)

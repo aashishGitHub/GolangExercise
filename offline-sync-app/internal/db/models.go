@@ -31,6 +31,13 @@ type DomainEvent struct {
 	PublishedAt   pgtype.Timestamptz `json:"publishedAt"`
 }
 
+type ExternalIDMap struct {
+	System      string    `json:"system"`
+	ExternalID  string    `json:"externalId"`
+	InternalID  uuid.UUID `json:"internalId"`
+	LastVersion int64     `json:"lastVersion"`
+}
+
 type LocationStat struct {
 	LocationID    uuid.UUID          `json:"locationId"`
 	GoodCount     int32              `json:"goodCount"`
@@ -65,6 +72,56 @@ type SiteAssessment struct {
 	CreatedAt  pgtype.Timestamptz `json:"createdAt"`
 	UpdatedAt  pgtype.Timestamptz `json:"updatedAt"`
 	CreatedBy  string             `json:"createdBy"`
+}
+
+type SyncDeadLetter struct {
+	ID        uuid.UUID          `json:"id"`
+	Source    string             `json:"source"`
+	System    string             `json:"system"`
+	RefID     string             `json:"refId"`
+	Payload   []byte             `json:"payload"`
+	Reason    string             `json:"reason"`
+	Attempts  int32              `json:"attempts"`
+	CreatedAt pgtype.Timestamptz `json:"createdAt"`
+}
+
+type SyncPushed struct {
+	System          string             `json:"system"`
+	InternalID      uuid.UUID          `json:"internalId"`
+	ExternalVersion int64              `json:"externalVersion"`
+	ContentHash     string             `json:"contentHash"`
+	PushedAt        pgtype.Timestamptz `json:"pushedAt"`
+}
+
+type SyncState struct {
+	System     string             `json:"system"`
+	Watermark  pgtype.Timestamptz `json:"watermark"`
+	RunSince   pgtype.Timestamptz `json:"runSince"`
+	NextCursor string             `json:"nextCursor"`
+	RunMax     pgtype.Timestamptz `json:"runMax"`
+	UpdatedAt  pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type WebhookInbox struct {
+	System      string             `json:"system"`
+	DeliveryID  string             `json:"deliveryId"`
+	Body        []byte             `json:"body"`
+	ReceivedAt  pgtype.Timestamptz `json:"receivedAt"`
+	Attempts    int32              `json:"attempts"`
+	LastError   string             `json:"lastError"`
+	Outcome     string             `json:"outcome"`
+	ProcessedAt pgtype.Timestamptz `json:"processedAt"`
+	DeadAt      pgtype.Timestamptz `json:"deadAt"`
+}
+
+type WorkItem struct {
+	ID        uuid.UUID          `json:"id"`
+	Title     string             `json:"title"`
+	Status    string             `json:"status"`
+	Notes     string             `json:"notes"`
+	DeletedAt pgtype.Timestamptz `json:"deletedAt"`
+	CreatedAt pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
 }
 
 type WsConnection struct {

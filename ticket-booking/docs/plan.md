@@ -717,6 +717,93 @@ the hold, explains. `npm test` (37 vitest model tests) and `npm run e2e` (`e2e/h
 asserts zero console errors and drives the a11y tree keyboard-only) both stay green against the new
 labels/copy.
 
+### Phase 14 — A demonstrable UI: the product plus an instrument panel *(additive)*
+
+**Why:** this system's best engineering is **invisible**. The CAS that proves a seat is never sold
+twice, the saga's compensation path that reallocates seats rather than merely refunding, the AIMD
+admission controller, the binary realtime protocol, the transactional outbox — none of it has any UI
+surface, and the frontend still polls `/availability` every 5s against one hardcoded event. This phase
+builds a UI that is both a usable product *and* an instrument for demonstrating that machinery to an
+engineering audience. Unlike Phase 13 (explicitly no-CSS, no new screens), this phase **does** invest in
+visual design and **does** add screens.
+
+**The blocking finding:** saga steps, waiting-room audit rows, money invariants, ticket IDs, domain
+events and dependency health are **not exposed over HTTP at all** — they live only in Postgres tables
+and background loops. Three of the four headline demos therefore need new read-only endpoints before
+any UI can show them. Two already-generated sqlc queries (`ListWaitingRoomAudit`, `GetSagaStep`) are
+called nowhere, and there is **no ticket-discovery query at all**, which is why `GET /tickets/{id}/qr`
+is currently unreachable from a browser.
+
+**Architecture.** Two surfaces over one data layer: **the product** (browse → seat map → hold →
+checkout → ticket) and **the Inspector**, a collapsible dev-tools-shaped drawer showing what the system
+just did (live WS frames, saga transitions, AIMD signals, invariant results). Plus **`/lab`** for the
+set-piece demos that have no place in a real product UI. This finally uses `react-router-dom` (giving
+the route-level code splitting this document already calls load-bearing for the waiting-room chunk) and
+`zustand` — both installed since Phase 4 and imported nowhere; shared realtime state now justifies the
+store, which the Phase 13 repair scope deliberately did not.
+
+**Preserved invariants:** the availability bitset stays a plain `Uint8Array` mutated in place, never in
+the store, with `availabilityVersion` incrementing once per animation frame (see "The trick that keeps
+30,000 seats out of React's diff" above). The a11y tree — roving tabindex, `role="grid"`, exact
+`aria-label` strings and their Playwright assertions — survives unchanged; styling is additive, and
+seat state is never conveyed by colour alone.
+
+**Backend additions** (read-only except the last; `DEMO_MODE`-gated where not obviously safe, default
+false so they cannot exist in a real deployment):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /orders/{id}/saga` | the 4 `order_saga_steps` rows (`extend_hold`/`charge`/`confirm`/`issue_ticket`) + states — new sqlc query |
+| `GET /orders/{id}/tickets` | ticket IDs — new sqlc query; no ticket-discovery query exists today |
+| `GET /orders` | the caller's orders, for history/resume |
+| `GET /events/{id}/waiting-room/audit?limit=` | AIMD tick history — **reuses the never-called `ListWaitingRoomAudit`** |
+| `GET /system/health` | Postgres + Redis reachability (today `/health` is a bare `{"status":"ok"}`) |
+| `GET /system/invariants` | the two money-safety counts — **reuses `reconcile.CheckInvariant`**, surfacing the violating IDs rather than only `len()` |
+| `GET /events/{id}/domain-events?sinceSeq=` | outbox stream; `outbox_seq` is a natural cursor |
+| `PUT /demo/payment-rates` | live chaos injection; `DEMO_MODE` only |
+
+Two correctness items this forces, worth doing regardless: `payment.FakeProvider` reads its rates
+per-call (so runtime toggling genuinely works) but is **unsynchronized**, with an unguarded `captured`
+map written from saga goroutines — a write endpoint without a `sync.RWMutex` would be a real data race.
+And each process builds its own provider, so a toggle only reaches the in-process saga in `cmd/server`,
+never `saga-worker` — the UI must say so rather than imply otherwise.
+
+**Stages** (each independently demoable; stop after any one):
+- **A. Foundation** — routes, stores, app shell, and a real design system legible at projector
+  distance. The event list finally uses the existing-but-unused `listEvents()`, retiring the hardcoded
+  `eventId={1}`.
+- **B. Realtime** — a real `/ws` client replacing the poll, implementing the contract exactly: binary
+  only, token in the query string, ignore `seq <= lastApplied`, reconnect with `sinceSeq`, and survive
+  the hub's deliberate local fidelity patches (10-min idle timeout, 128 KB cap, **~1% chaos disconnect**
+  on live delta writes — 1006 with no close frame). Gap-fill returns zero frames, *or* one coalesced
+  SPARSE, *or* one full SNAPSHOT, never a combination; the 200-entry ring means overflow legitimately
+  forces a snapshot. `0x03 RUN` is declared but never emitted — do not implement it. The Inspector
+  renders live frames as hex with decoded type and `seq`.
+- **C. Checkout + saga** — resumable checkout keyed on `orderId` in the URL, polling at the server's own
+  `pollAfterMs`, with the state machine visualized live and the **`reallocated`** branch called out
+  explicitly ("your original seats were taken; we secured equivalent seats" is the best story the saga
+  tells, and the response already carries the flag). Then tickets/QR with refetch-on-403, and `/gate`
+  showing redeem → `already_redeemed`.
+- **D. Waiting room + AIMD** — real position/ETA, plus a live chart plotting `rate` and `cursor_value`
+  against the three signals at their real thresholds (p99 > 500 ms, pool > 0.80, errors > 0.01; halve
+  on any red, +5.0 on all green, 1 Hz). The control loop closing, plotted from real rows.
+- **E. The Lab** — the race (N concurrent holds at one seat → exactly one 201, N−1 `SEAT_TAKEN`, with
+  in-browser percentiles and a DB cross-check), payment chaos sliders, dependency health tiles for the
+  "stop Redis and watch it survive" demo, and the two money invariants run on demand.
+
+**Verify:** the frame decoder is proven by a vitest that builds bytes to the Go encoder's spec by hand —
+mirroring the independent-encoder discipline already guarding `seats.bin`, never an encode/decode pair
+that could share a bug. Then live: hold a seat in one browser and paste the actual `0x02` bytes the
+other receives; force a resync and confirm exactly one (not a storm); let the chaos disconnect fire and
+confirm silent recovery. Run the race in-browser and cross-check the DB for one `status=1` row, one
+distinct `hold_id`, and `duplicate live tickets: 0 rows`. Drive an order to `TICKETED`, then
+`AmbiguousRate=1.0` → confirm the saga *stalls* rather than guessing, reconcile, and confirm both money
+invariants still return 0 rows. Clamp the pgx pool and confirm the plotted rate halves within 3 ticks.
+`docker stop ticketing-redis-1` → `/availability` still 200s with the same ETag and no
+`X-Seatmap-Version`. Regression: `npm test`, `npm run e2e` (zero console errors, keyboard-only
+walkthrough with exact `aria-label` strings intact), `go build ./...`, `make test-integration`,
+`make tf-validate` — plus the axe scan Phase 4 scoped out, now that there is a real design to scan.
+
 ---
 
 ## Frontend verification standard

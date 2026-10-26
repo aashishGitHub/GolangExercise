@@ -1,0 +1,65 @@
+scalar Time
+
+enum PhotoCondition {
+  GOOD
+  MODERATE
+  BAD
+}
+
+type Query {
+  locations(first: Int = 20, after: String, updatedSince: Time): LocationConnection!
+  location(id: ID!): Location
+}
+
+type LocationConnection {
+  edges: [LocationEdge!]!
+  pageInfo: PageInfo!
+}
+
+type LocationEdge {
+  cursor: String!
+  node: Location!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
+type Location {
+  id: ID!
+  name: String!
+  latitude: Float!
+  longitude: Float!
+  createdAt: Time!
+  updatedAt: Time!
+  siteAssessments: [SiteAssessment!]
+  stats: LocationStats
+}
+
+type SiteAssessment {
+  id: ID!
+  name: String!
+  notes: String!
+  createdAt: Time!
+  updatedAt: Time!
+  location: Location
+  photos: [Photo!]
+}
+
+type Photo {
+  id: ID!
+  s3Key: String!
+  latitude: Float!
+  longitude: Float!
+  condition: PhotoCondition!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type LocationStats {
+  goodCount: Int!
+  moderateCount: Int!
+  badCount: Int!
+  updatedAt: Time!
+}

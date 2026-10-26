@@ -127,3 +127,110 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = EXCLUDED.updated_at
 WHERE EXCLUDED.updated_at > photos.updated_at
 RETURNING *;
+
+-- ===========================================================================
+-- Two-way sync: inbound webhooks + SaaS<->SaaS (internal/webhook, internal/twoway)
+-- ===========================================================================
+
+-- name: InsertExternalLink :exec
+INSERT INTO external_id_map (system, external_id, internal_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (system, external_id) DO NOTHING;
+
+-- name: GetExternalLink :one
+SELECT * FROM external_id_map WHERE system = $1 AND external_id = $2;
+
+-- name: GetExternalLinkByInternal :one
+SELECT * FROM external_id_map WHERE system = $1 AND internal_id = $2;
+
+-- name: AdvanceLinkVersion :one
+-- Atomic version gate: 0 rows (pgx.ErrNoRows) unless the incoming external
+-- version is strictly newer than the last applied one. Also row-locks the
+-- link until the surrounding transaction ends.
+UPDATE external_id_map SET last_version = sqlc.arg(version)
+WHERE system = $1 AND external_id = $2 AND last_version < sqlc.arg(version)
+RETURNING *;
+
+-- name: GetWorkItemForUpdate :one
+SELECT * FROM work_items WHERE id = $1 FOR UPDATE;
+
+-- name: UpsertWorkItem :one
+INSERT INTO work_items (id, title, status, notes, deleted_at)
+VALUES (
+    sqlc.arg(id), sqlc.arg(title), sqlc.arg(status), sqlc.arg(notes),
+    CASE WHEN sqlc.arg(deleted)::bool THEN now() END
+)
+ON CONFLICT (id) DO UPDATE SET
+    title      = EXCLUDED.title,
+    status     = EXCLUDED.status,
+    notes      = EXCLUDED.notes,
+    deleted_at = CASE WHEN sqlc.arg(deleted)::bool THEN COALESCE(work_items.deleted_at, now()) END,
+    updated_at = now()
+RETURNING *;
+
+-- name: UpdateWorkItemNotes :one
+UPDATE work_items SET notes = $2, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: GetSyncPushed :one
+SELECT * FROM sync_pushed WHERE system = $1 AND internal_id = $2;
+
+-- name: UpsertSyncPushed :exec
+INSERT INTO sync_pushed (system, internal_id, external_version, content_hash)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (system, internal_id) DO UPDATE SET
+    external_version = EXCLUDED.external_version,
+    content_hash     = EXCLUDED.content_hash,
+    pushed_at        = now()
+WHERE EXCLUDED.external_version > sync_pushed.external_version;
+
+-- name: GetSyncState :one
+SELECT * FROM sync_state WHERE system = $1;
+
+-- name: UpsertSyncState :exec
+INSERT INTO sync_state (system, watermark, run_since, next_cursor, run_max)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (system) DO UPDATE SET
+    watermark   = EXCLUDED.watermark,
+    run_since   = EXCLUDED.run_since,
+    next_cursor = EXCLUDED.next_cursor,
+    run_max     = EXCLUDED.run_max,
+    updated_at  = now();
+
+-- name: InsertWebhookInbox :execrows
+-- 1 row = first delivery, 0 rows = duplicate delivery id.
+INSERT INTO webhook_inbox (system, delivery_id, body)
+VALUES ($1, $2, $3)
+ON CONFLICT (system, delivery_id) DO NOTHING;
+
+-- name: ListPendingInbox :many
+SELECT delivery_id FROM webhook_inbox
+WHERE system = $1 AND processed_at IS NULL AND dead_at IS NULL
+ORDER BY received_at, delivery_id
+LIMIT $2;
+
+-- name: ClaimInboxRow :one
+SELECT * FROM webhook_inbox
+WHERE system = $1 AND delivery_id = $2 AND processed_at IS NULL AND dead_at IS NULL
+FOR UPDATE SKIP LOCKED;
+
+-- name: MarkInboxProcessed :exec
+UPDATE webhook_inbox SET processed_at = now(), outcome = $3
+WHERE system = $1 AND delivery_id = $2;
+
+-- name: RecordInboxFailure :one
+UPDATE webhook_inbox SET attempts = attempts + 1, last_error = $3
+WHERE system = $1 AND delivery_id = $2
+RETURNING *;
+
+-- name: MarkInboxDead :exec
+UPDATE webhook_inbox SET dead_at = now()
+WHERE system = $1 AND delivery_id = $2;
+
+-- name: InsertDeadLetter :exec
+INSERT INTO sync_dead_letters (source, system, ref_id, payload, reason, attempts)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListDeadLetters :many
+SELECT * FROM sync_dead_letters WHERE system = $1 ORDER BY created_at;

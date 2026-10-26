@@ -58,6 +58,8 @@ build-lambda:
 	cd infra/terraform/modules/eventing/build/outbox-relay && zip -q -X bootstrap.zip bootstrap
 	GOOS=linux GOARCH=arm64 go build -o infra/terraform/modules/websocket/build/bootstrap ./cmd/ws-connect-lambda
 	cd infra/terraform/modules/websocket/build && zip -q -X bootstrap.zip bootstrap
+	GOOS=linux GOARCH=arm64 go build -o infra/terraform/modules/webhook/build/bootstrap ./cmd/webhook-receiver-lambda
+	cd infra/terraform/modules/webhook/build && zip -q -X bootstrap.zip bootstrap
 
 # Never runs plan/apply — real AWS credentials are a separate, explicit step.
 tf-validate: build-lambda

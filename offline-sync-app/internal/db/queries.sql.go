@@ -12,6 +12,61 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const advanceLinkVersion = `-- name: AdvanceLinkVersion :one
+UPDATE external_id_map SET last_version = $3
+WHERE system = $1 AND external_id = $2 AND last_version < $3
+RETURNING system, external_id, internal_id, last_version
+`
+
+type AdvanceLinkVersionParams struct {
+	System     string `json:"system"`
+	ExternalID string `json:"externalId"`
+	Version    int64  `json:"version"`
+}
+
+// Atomic version gate: 0 rows (pgx.ErrNoRows) unless the incoming external
+// version is strictly newer than the last applied one. Also row-locks the
+// link until the surrounding transaction ends.
+func (q *Queries) AdvanceLinkVersion(ctx context.Context, arg AdvanceLinkVersionParams) (ExternalIDMap, error) {
+	row := q.db.QueryRow(ctx, advanceLinkVersion, arg.System, arg.ExternalID, arg.Version)
+	var i ExternalIDMap
+	err := row.Scan(
+		&i.System,
+		&i.ExternalID,
+		&i.InternalID,
+		&i.LastVersion,
+	)
+	return i, err
+}
+
+const claimInboxRow = `-- name: ClaimInboxRow :one
+SELECT system, delivery_id, body, received_at, attempts, last_error, outcome, processed_at, dead_at FROM webhook_inbox
+WHERE system = $1 AND delivery_id = $2 AND processed_at IS NULL AND dead_at IS NULL
+FOR UPDATE SKIP LOCKED
+`
+
+type ClaimInboxRowParams struct {
+	System     string `json:"system"`
+	DeliveryID string `json:"deliveryId"`
+}
+
+func (q *Queries) ClaimInboxRow(ctx context.Context, arg ClaimInboxRowParams) (WebhookInbox, error) {
+	row := q.db.QueryRow(ctx, claimInboxRow, arg.System, arg.DeliveryID)
+	var i WebhookInbox
+	err := row.Scan(
+		&i.System,
+		&i.DeliveryID,
+		&i.Body,
+		&i.ReceivedAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.Outcome,
+		&i.ProcessedAt,
+		&i.DeadAt,
+	)
+	return i, err
+}
+
 const countPhotosByConditionForLocation = `-- name: CountPhotosByConditionForLocation :many
 SELECT p.condition, count(*) AS count
 FROM photos p
@@ -63,6 +118,48 @@ DELETE FROM ws_connections WHERE connection_id = $1
 func (q *Queries) DeleteWSConnection(ctx context.Context, connectionID string) error {
 	_, err := q.db.Exec(ctx, deleteWSConnection, connectionID)
 	return err
+}
+
+const getExternalLink = `-- name: GetExternalLink :one
+SELECT system, external_id, internal_id, last_version FROM external_id_map WHERE system = $1 AND external_id = $2
+`
+
+type GetExternalLinkParams struct {
+	System     string `json:"system"`
+	ExternalID string `json:"externalId"`
+}
+
+func (q *Queries) GetExternalLink(ctx context.Context, arg GetExternalLinkParams) (ExternalIDMap, error) {
+	row := q.db.QueryRow(ctx, getExternalLink, arg.System, arg.ExternalID)
+	var i ExternalIDMap
+	err := row.Scan(
+		&i.System,
+		&i.ExternalID,
+		&i.InternalID,
+		&i.LastVersion,
+	)
+	return i, err
+}
+
+const getExternalLinkByInternal = `-- name: GetExternalLinkByInternal :one
+SELECT system, external_id, internal_id, last_version FROM external_id_map WHERE system = $1 AND internal_id = $2
+`
+
+type GetExternalLinkByInternalParams struct {
+	System     string    `json:"system"`
+	InternalID uuid.UUID `json:"internalId"`
+}
+
+func (q *Queries) GetExternalLinkByInternal(ctx context.Context, arg GetExternalLinkByInternalParams) (ExternalIDMap, error) {
+	row := q.db.QueryRow(ctx, getExternalLinkByInternal, arg.System, arg.InternalID)
+	var i ExternalIDMap
+	err := row.Scan(
+		&i.System,
+		&i.ExternalID,
+		&i.InternalID,
+		&i.LastVersion,
+	)
+	return i, err
 }
 
 const getLocation = `-- name: GetLocation :one
@@ -141,6 +238,91 @@ func (q *Queries) GetSiteAssessment(ctx context.Context, id uuid.UUID) (SiteAsse
 	return i, err
 }
 
+const getSyncPushed = `-- name: GetSyncPushed :one
+SELECT system, internal_id, external_version, content_hash, pushed_at FROM sync_pushed WHERE system = $1 AND internal_id = $2
+`
+
+type GetSyncPushedParams struct {
+	System     string    `json:"system"`
+	InternalID uuid.UUID `json:"internalId"`
+}
+
+func (q *Queries) GetSyncPushed(ctx context.Context, arg GetSyncPushedParams) (SyncPushed, error) {
+	row := q.db.QueryRow(ctx, getSyncPushed, arg.System, arg.InternalID)
+	var i SyncPushed
+	err := row.Scan(
+		&i.System,
+		&i.InternalID,
+		&i.ExternalVersion,
+		&i.ContentHash,
+		&i.PushedAt,
+	)
+	return i, err
+}
+
+const getSyncState = `-- name: GetSyncState :one
+SELECT system, watermark, run_since, next_cursor, run_max, updated_at FROM sync_state WHERE system = $1
+`
+
+func (q *Queries) GetSyncState(ctx context.Context, system string) (SyncState, error) {
+	row := q.db.QueryRow(ctx, getSyncState, system)
+	var i SyncState
+	err := row.Scan(
+		&i.System,
+		&i.Watermark,
+		&i.RunSince,
+		&i.NextCursor,
+		&i.RunMax,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getWorkItemForUpdate = `-- name: GetWorkItemForUpdate :one
+SELECT id, title, status, notes, deleted_at, created_at, updated_at FROM work_items WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetWorkItemForUpdate(ctx context.Context, id uuid.UUID) (WorkItem, error) {
+	row := q.db.QueryRow(ctx, getWorkItemForUpdate, id)
+	var i WorkItem
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.Notes,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertDeadLetter = `-- name: InsertDeadLetter :exec
+INSERT INTO sync_dead_letters (source, system, ref_id, payload, reason, attempts)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertDeadLetterParams struct {
+	Source   string `json:"source"`
+	System   string `json:"system"`
+	RefID    string `json:"refId"`
+	Payload  []byte `json:"payload"`
+	Reason   string `json:"reason"`
+	Attempts int32  `json:"attempts"`
+}
+
+func (q *Queries) InsertDeadLetter(ctx context.Context, arg InsertDeadLetterParams) error {
+	_, err := q.db.Exec(ctx, insertDeadLetter,
+		arg.Source,
+		arg.System,
+		arg.RefID,
+		arg.Payload,
+		arg.Reason,
+		arg.Attempts,
+	)
+	return err
+}
+
 const insertDomainEvent = `-- name: InsertDomainEvent :one
 INSERT INTO domain_events (aggregate_type, aggregate_id, event_type, schema_version, payload, actor_sub)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -180,6 +362,27 @@ func (q *Queries) InsertDomainEvent(ctx context.Context, arg InsertDomainEventPa
 	return i, err
 }
 
+const insertExternalLink = `-- name: InsertExternalLink :exec
+
+INSERT INTO external_id_map (system, external_id, internal_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (system, external_id) DO NOTHING
+`
+
+type InsertExternalLinkParams struct {
+	System     string    `json:"system"`
+	ExternalID string    `json:"externalId"`
+	InternalID uuid.UUID `json:"internalId"`
+}
+
+// ===========================================================================
+// Two-way sync: inbound webhooks + SaaS<->SaaS (internal/webhook, internal/twoway)
+// ===========================================================================
+func (q *Queries) InsertExternalLink(ctx context.Context, arg InsertExternalLinkParams) error {
+	_, err := q.db.Exec(ctx, insertExternalLink, arg.System, arg.ExternalID, arg.InternalID)
+	return err
+}
+
 const insertWSConnection = `-- name: InsertWSConnection :exec
 INSERT INTO ws_connections (connection_id, user_sub, location_id) VALUES ($1, $2, $3)
 `
@@ -193,6 +396,27 @@ type InsertWSConnectionParams struct {
 func (q *Queries) InsertWSConnection(ctx context.Context, arg InsertWSConnectionParams) error {
 	_, err := q.db.Exec(ctx, insertWSConnection, arg.ConnectionID, arg.UserSub, arg.LocationID)
 	return err
+}
+
+const insertWebhookInbox = `-- name: InsertWebhookInbox :execrows
+INSERT INTO webhook_inbox (system, delivery_id, body)
+VALUES ($1, $2, $3)
+ON CONFLICT (system, delivery_id) DO NOTHING
+`
+
+type InsertWebhookInboxParams struct {
+	System     string `json:"system"`
+	DeliveryID string `json:"deliveryId"`
+	Body       []byte `json:"body"`
+}
+
+// 1 row = first delivery, 0 rows = duplicate delivery id.
+func (q *Queries) InsertWebhookInbox(ctx context.Context, arg InsertWebhookInboxParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertWebhookInbox, arg.System, arg.DeliveryID, arg.Body)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const isEventProcessed = `-- name: IsEventProcessed :one
@@ -209,6 +433,71 @@ func (q *Queries) IsEventProcessed(ctx context.Context, arg IsEventProcessedPara
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const listDeadLetters = `-- name: ListDeadLetters :many
+SELECT id, source, system, ref_id, payload, reason, attempts, created_at FROM sync_dead_letters WHERE system = $1 ORDER BY created_at
+`
+
+func (q *Queries) ListDeadLetters(ctx context.Context, system string) ([]SyncDeadLetter, error) {
+	rows, err := q.db.Query(ctx, listDeadLetters, system)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SyncDeadLetter
+	for rows.Next() {
+		var i SyncDeadLetter
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.System,
+			&i.RefID,
+			&i.Payload,
+			&i.Reason,
+			&i.Attempts,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingInbox = `-- name: ListPendingInbox :many
+SELECT delivery_id FROM webhook_inbox
+WHERE system = $1 AND processed_at IS NULL AND dead_at IS NULL
+ORDER BY received_at, delivery_id
+LIMIT $2
+`
+
+type ListPendingInboxParams struct {
+	System string `json:"system"`
+	Limit  int32  `json:"limit"`
+}
+
+func (q *Queries) ListPendingInbox(ctx context.Context, arg ListPendingInboxParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPendingInbox, arg.System, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var delivery_id string
+		if err := rows.Scan(&delivery_id); err != nil {
+			return nil, err
+		}
+		items = append(items, delivery_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPhotosBySite = `-- name: ListPhotosBySite :many
@@ -412,6 +701,92 @@ func (q *Queries) MarkEventPublished(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const markInboxDead = `-- name: MarkInboxDead :exec
+UPDATE webhook_inbox SET dead_at = now()
+WHERE system = $1 AND delivery_id = $2
+`
+
+type MarkInboxDeadParams struct {
+	System     string `json:"system"`
+	DeliveryID string `json:"deliveryId"`
+}
+
+func (q *Queries) MarkInboxDead(ctx context.Context, arg MarkInboxDeadParams) error {
+	_, err := q.db.Exec(ctx, markInboxDead, arg.System, arg.DeliveryID)
+	return err
+}
+
+const markInboxProcessed = `-- name: MarkInboxProcessed :exec
+UPDATE webhook_inbox SET processed_at = now(), outcome = $3
+WHERE system = $1 AND delivery_id = $2
+`
+
+type MarkInboxProcessedParams struct {
+	System     string `json:"system"`
+	DeliveryID string `json:"deliveryId"`
+	Outcome    string `json:"outcome"`
+}
+
+func (q *Queries) MarkInboxProcessed(ctx context.Context, arg MarkInboxProcessedParams) error {
+	_, err := q.db.Exec(ctx, markInboxProcessed, arg.System, arg.DeliveryID, arg.Outcome)
+	return err
+}
+
+const recordInboxFailure = `-- name: RecordInboxFailure :one
+UPDATE webhook_inbox SET attempts = attempts + 1, last_error = $3
+WHERE system = $1 AND delivery_id = $2
+RETURNING system, delivery_id, body, received_at, attempts, last_error, outcome, processed_at, dead_at
+`
+
+type RecordInboxFailureParams struct {
+	System     string `json:"system"`
+	DeliveryID string `json:"deliveryId"`
+	LastError  string `json:"lastError"`
+}
+
+func (q *Queries) RecordInboxFailure(ctx context.Context, arg RecordInboxFailureParams) (WebhookInbox, error) {
+	row := q.db.QueryRow(ctx, recordInboxFailure, arg.System, arg.DeliveryID, arg.LastError)
+	var i WebhookInbox
+	err := row.Scan(
+		&i.System,
+		&i.DeliveryID,
+		&i.Body,
+		&i.ReceivedAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.Outcome,
+		&i.ProcessedAt,
+		&i.DeadAt,
+	)
+	return i, err
+}
+
+const updateWorkItemNotes = `-- name: UpdateWorkItemNotes :one
+UPDATE work_items SET notes = $2, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, title, status, notes, deleted_at, created_at, updated_at
+`
+
+type UpdateWorkItemNotesParams struct {
+	ID    uuid.UUID `json:"id"`
+	Notes string    `json:"notes"`
+}
+
+func (q *Queries) UpdateWorkItemNotes(ctx context.Context, arg UpdateWorkItemNotesParams) (WorkItem, error) {
+	row := q.db.QueryRow(ctx, updateWorkItemNotes, arg.ID, arg.Notes)
+	var i WorkItem
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.Notes,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertLocation = `-- name: UpsertLocation :one
 INSERT INTO disaster_locations (id, name, latitude, longitude, created_at, updated_at, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -598,6 +973,107 @@ func (q *Queries) UpsertSiteAssessment(ctx context.Context, arg UpsertSiteAssess
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CreatedBy,
+	)
+	return i, err
+}
+
+const upsertSyncPushed = `-- name: UpsertSyncPushed :exec
+INSERT INTO sync_pushed (system, internal_id, external_version, content_hash)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (system, internal_id) DO UPDATE SET
+    external_version = EXCLUDED.external_version,
+    content_hash     = EXCLUDED.content_hash,
+    pushed_at        = now()
+WHERE EXCLUDED.external_version > sync_pushed.external_version
+`
+
+type UpsertSyncPushedParams struct {
+	System          string    `json:"system"`
+	InternalID      uuid.UUID `json:"internalId"`
+	ExternalVersion int64     `json:"externalVersion"`
+	ContentHash     string    `json:"contentHash"`
+}
+
+func (q *Queries) UpsertSyncPushed(ctx context.Context, arg UpsertSyncPushedParams) error {
+	_, err := q.db.Exec(ctx, upsertSyncPushed,
+		arg.System,
+		arg.InternalID,
+		arg.ExternalVersion,
+		arg.ContentHash,
+	)
+	return err
+}
+
+const upsertSyncState = `-- name: UpsertSyncState :exec
+INSERT INTO sync_state (system, watermark, run_since, next_cursor, run_max)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (system) DO UPDATE SET
+    watermark   = EXCLUDED.watermark,
+    run_since   = EXCLUDED.run_since,
+    next_cursor = EXCLUDED.next_cursor,
+    run_max     = EXCLUDED.run_max,
+    updated_at  = now()
+`
+
+type UpsertSyncStateParams struct {
+	System     string             `json:"system"`
+	Watermark  pgtype.Timestamptz `json:"watermark"`
+	RunSince   pgtype.Timestamptz `json:"runSince"`
+	NextCursor string             `json:"nextCursor"`
+	RunMax     pgtype.Timestamptz `json:"runMax"`
+}
+
+func (q *Queries) UpsertSyncState(ctx context.Context, arg UpsertSyncStateParams) error {
+	_, err := q.db.Exec(ctx, upsertSyncState,
+		arg.System,
+		arg.Watermark,
+		arg.RunSince,
+		arg.NextCursor,
+		arg.RunMax,
+	)
+	return err
+}
+
+const upsertWorkItem = `-- name: UpsertWorkItem :one
+INSERT INTO work_items (id, title, status, notes, deleted_at)
+VALUES (
+    $1, $2, $3, $4,
+    CASE WHEN $5::bool THEN now() END
+)
+ON CONFLICT (id) DO UPDATE SET
+    title      = EXCLUDED.title,
+    status     = EXCLUDED.status,
+    notes      = EXCLUDED.notes,
+    deleted_at = CASE WHEN $5::bool THEN COALESCE(work_items.deleted_at, now()) END,
+    updated_at = now()
+RETURNING id, title, status, notes, deleted_at, created_at, updated_at
+`
+
+type UpsertWorkItemParams struct {
+	ID      uuid.UUID `json:"id"`
+	Title   string    `json:"title"`
+	Status  string    `json:"status"`
+	Notes   string    `json:"notes"`
+	Deleted bool      `json:"deleted"`
+}
+
+func (q *Queries) UpsertWorkItem(ctx context.Context, arg UpsertWorkItemParams) (WorkItem, error) {
+	row := q.db.QueryRow(ctx, upsertWorkItem,
+		arg.ID,
+		arg.Title,
+		arg.Status,
+		arg.Notes,
+		arg.Deleted,
+	)
+	var i WorkItem
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.Notes,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

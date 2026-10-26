@@ -16,3 +16,18 @@ resource "aws_secretsmanager_secret_version" "db_credentials" {
     password = random_password.db_master.result
   })
 }
+
+# The external system must hold the same value: an operator copies it from this secret into the vendor's webhook settings.
+resource "random_password" "webhook" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "webhook" {
+  name = "${var.name_prefix}/webhook-secret"
+}
+
+resource "aws_secretsmanager_secret_version" "webhook" {
+  secret_id     = aws_secretsmanager_secret.webhook.id
+  secret_string = random_password.webhook.result
+}

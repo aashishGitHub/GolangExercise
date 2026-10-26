@@ -145,3 +145,15 @@ module "eventing" {
   websocket_api_arn                 = module.websocket.api_arn
   websocket_management_api_endpoint = module.websocket.management_api_endpoint
 }
+
+module "webhook" {
+  source                   = "../../modules/webhook"
+  name_prefix              = local.name_prefix
+  private_subnet_ids       = module.network.private_subnet_ids
+  lambda_security_group_id = module.network.lambda_security_group_id
+  api_id                   = module.api.api_id
+  api_execution_arn        = module.api.execution_arn
+  system                   = "mockjira"
+  webhook_secret           = module.secrets.webhook_secret
+  base_environment         = local.base_environment
+}

@@ -15,6 +15,7 @@ web/dev-dist/
 infra/terraform/modules/compute/build/
 infra/terraform/modules/eventing/build/
 infra/terraform/modules/websocket/build/
+infra/terraform/modules/webhook/build/
 infra/terraform/**/.terraform/
 infra/terraform/**/*.tfstate
 infra/terraform/**/*.tfstate.backup
