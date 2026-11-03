@@ -86,3 +86,7 @@ docs/                           PRD + architecture plan
 ```bash
 make test            # go test ./...
 ```
+
+## Learning path
+Beginner to senior, phase by phase (plain-English basics, file walkthroughs, 4-tier interview Q&A):
+[`docs/learn/`](docs/learn/README.md)

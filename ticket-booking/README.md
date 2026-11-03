@@ -223,6 +223,8 @@ completeness. The short list, with full detail in `MILESTONES.md`:
 
 ## Where to go next
 
+- **Learning it from beginner to senior, phase by phase** → [`docs/learn/`](docs/learn/README.md)
+  (plain-English basics, file walkthroughs, 4-tier interview Q&A per phase)
 - **Building a mental model of the system** → `docs/plan.md` (start with "Locked decisions" and "The
   correctness core")
 - **What's been built and how it was proven** → `MILESTONES.md`, phase by phase

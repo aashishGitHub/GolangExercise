@@ -1,0 +1,55 @@
+# Phase 9 — GraphQL: Basics
+
+Siblings: [FILES.md](FILES.md) · [QUESTIONS.md](QUESTIONS.md) · [learn index](../README.md) · full design doc: [graphql.md](../../graphql.md)
+
+Goal of this phase: a read-only GraphQL API over locations, site assessments, photos and per-location stats. It runs as its own program on its own port. Commands run from `offline-sync-app/`.
+
+1. **GraphQL**. GraphQL is a way for a client to ask a server for exactly the fields it wants, in one request, in the shape it wants. The client sends a query text; the server answers with JSON of the same shape. Analogy: ordering from a menu where you tick only the ingredients you want, instead of getting a fixed set meal. In this project: [internal/graph/schema.graphqls](../../../internal/graph/schema.graphqls); served by [cmd/graphql/main.go](../../../cmd/graphql/main.go) at `POST /graphql`.
+
+2. **schema**. The schema is the written contract: which types exist (`Location`, `SiteAssessment`, `Photo`), which fields they have, and which entry points (`Query.locations`, `Query.location`) a client may call. Anything not in the schema cannot be asked for. Analogy: the menu itself. In this project: [internal/graph/schema.graphqls](../../../internal/graph/schema.graphqls).
+
+3. **query**. A query is the text the client sends, for example `{ locations(first: 50) { edges { node { id } } } }`. It lists fields to read. In this project there are no mutations (writes) and no subscriptions (live push); the schema only has `Query`. Analogy: a read-only order slip. In this project: [internal/graph/schema.graphqls](../../../internal/graph/schema.graphqls); why no writes: [graphql.md](../../graphql.md), table "Decisions".
+
+4. **resolver**. A resolver is a small Go function that fetches the value of one field. If a client asks for `Location.siteAssessments`, the matching resolver runs. Analogy: the kitchen station that makes one dish on the menu. In this project: [internal/graph/schema.resolvers.go](../../../internal/graph/schema.resolvers.go).
+
+5. **code generation (gqlgen)**. gqlgen is a tool that reads the schema file and writes Go code (`generated.go`) that wires queries to resolver functions. If a resolver does not match the schema, the Go compiler fails. Analogy: a form printer that makes the blank forms from your template. In this project: `//go:generate` line in [internal/graph/resolver.go](../../../internal/graph/resolver.go), config in [internal/graph/gqlgen.yml](../../../internal/graph/gqlgen.yml); run with `go generate ./internal/graph`.
+
+6. **N+1 problem**. You load 1 list of N parents, then run one extra query per parent to get its children: 1 + N queries. It is slow because every query is a round trip to the database. Analogy: going to the shop 50 times for 50 items instead of once with a list. In this project: naive count 201 queries (1 + 50 + 150), batched count 3; see `TestNPlusOne_NaiveResolversIssueOnePlusNPlusM` in [internal/graph/nplusone_test.go](../../../internal/graph/nplusone_test.go).
+
+7. **DataLoader**. A DataLoader collects all the "give me the children of parent X" requests that happen at nearly the same moment and sends them as one batched query. Analogy: a bus driver waiting two minutes at the stop so many riders board one bus. In this project: [internal/graph/dataloader.go](../../../internal/graph/dataloader.go), `DataLoader.Load`.
+
+8. **batching window**. The short wait the loader uses to gather requests. Here it is 2 milliseconds, or until 500 keys have arrived, whichever is first. A too-short window splits a batch into two queries, which costs time but never gives wrong data. Analogy: the bus leaves when full or when the timer ends. In this project: `DefaultServerConfig` in [internal/graph/handler.go](../../../internal/graph/handler.go).
+
+9. **per-request cache**. A loader remembers what it already fetched, but only during one HTTP request. A global cache would have no way to expire old data and could show one user another user's rows. Analogy: a note on your own desk that you throw away at the end of the day, not a public whiteboard. In this project: `requestScope` creates new loaders per request in [internal/graph/handler.go](../../../internal/graph/handler.go).
+
+10. **batch SQL with `= ANY($1)`**. One SQL statement that takes a list of ids and returns all matching rows, instead of one statement per id. Analogy: asking the librarian for 50 books in one trip. In this project: `SiteAssessmentsByLocationIDs` in [internal/graph/pgstore.go](../../../internal/graph/pgstore.go).
+
+11. **connection, edges, cursor**. GraphQL lists are usually wrapped: a "connection" holds "edges"; each edge has a `node` (the item) and a `cursor` (a bookmark for that item). `pageInfo` says if there is a next page. Analogy: a bookmarked paperback; each page carries its own bookmark. In this project: `LocationConnection` in [internal/graph/schema.graphqls](../../../internal/graph/schema.graphqls).
+
+12. **offset pagination**. "Skip the first 100 rows, give me 20." The database still walks past the 100 skipped rows, and if rows are added while you page, you can see a row twice or miss one. Analogy: counting pages from the front of a book that someone keeps inserting pages into. In this project: not used; see "Keyset cursors, not offsets" in [graphql.md](../../graphql.md).
+
+13. **keyset cursor**. Instead of "skip N", you say "give me rows after this exact position" using the last row's sort values. The database jumps straight to that position with an index. Analogy: "continue after the page with this bookmark", not "continue after page 100". In this project: [internal/graph/cursor.go](../../../internal/graph/cursor.go), `EncodeCursor` / `DecodeCursor`; the SQL is built by `listLocationsSQL` in [internal/graph/pgstore.go](../../../internal/graph/pgstore.go).
+
+14. **tie-breaker column**. Many rows can have the same `updated_at`. If you page only by time, rows sharing a timestamp can be lost between pages. Adding `id` as a second sort column makes every position unique. Analogy: sorting people by birthday, then by name when birthdays match. In this project: `ORDER BY updated_at, id` and `(updated_at, id) > ($1, $2)` in `listLocationsSQL`.
+
+15. **composite index**. An index on two columns together, in the same order as the query sorts. With it, Postgres seeks to the position in one step instead of scanning the table. Analogy: a phone book sorted by surname, then first name. In this project: [migrations/000004_locations_updated_at_id_idx.up.sql](../../../migrations/000004_locations_updated_at_id_idx.up.sql).
+
+16. **at-least-once delivery**. If a row changes while a client is paging, it moves to the end of the order and shows up again. The client may see a row twice but never misses one, so the client must de-duplicate by `id`. Analogy: a courier who sometimes delivers a duplicate rather than risk losing a parcel. In this project: `TestIntegration_RowUpdatedMidWalkReappearsAndIsNeverSkipped` in [internal/graph/integration_test.go](../../../internal/graph/integration_test.go).
+
+17. **query depth limit**. A cap on how deeply a query can nest. The schema is cyclic (`Location` has `siteAssessments`, and `SiteAssessment` has `location`), so a client could nest forever and hammer the database. Analogy: a cap on how many Russian dolls may be opened in one request. In this project: `queryLimits` and `measure` in [internal/graph/limits.go](../../../internal/graph/limits.go); default 8.
+
+18. **query complexity limit**. A cost estimate for a query, in approximate rows returned, with a maximum. A query that asks for 100 locations, each with assessments and photos, can cost far more than a flat one. Analogy: a shopping basket weight limit. In this project: `complexityRoot` in [internal/graph/limits.go](../../../internal/graph/limits.go); default 10000.
+
+19. **fragment bomb**. GraphQL "fragments" are reusable pieces of a query. An attacker can make fragments that include each other many times so a short text expands into a huge query. The code counts fields once per fragment (memoising) to reject this quickly. Analogy: a photocopier loop where each copy makes two copies. In this project: `measure` in [internal/graph/limits.go](../../../internal/graph/limits.go); `TestMeasure_MemoisesFragmentsSoABombIsLinear` in [internal/graph/safety_test.go](../../../internal/graph/safety_test.go).
+
+20. **introspection**. A built-in GraphQL feature that lets anyone ask the server to describe its own schema. Handy for developers, but it also helps attackers. It is off unless `APP_ENV=local`. Analogy: a building directory in the lobby, taken down in production. In this project: `Introspection` flag set in [cmd/graphql/main.go](../../../cmd/graphql/main.go); `TestIntrospection_DisabledByDefaultEnabledOnRequest` in [internal/graph/query_test.go](../../../internal/graph/query_test.go).
+
+21. **partial results and nullable fields**. If one child field fails, the response can still return the rest, with `null` for the failed field and an `errors` entry that names its path. This works only if that field is nullable in the schema. Analogy: a restaurant serving the meal without the one dish that burnt. In this project: `siteAssessments: [SiteAssessment!]` in [internal/graph/schema.graphqls](../../../internal/graph/schema.graphqls); `TestPartialResults_FailingChildFieldKeepsSiblingsAndReportsPath` in [internal/graph/safety_test.go](../../../internal/graph/safety_test.go).
+
+22. **error masking**. Internal errors (which may contain SQL or host names) are replaced with the text `internal error` before they reach the client. The real error goes to the server log. Analogy: the waiter says "the kitchen has a problem", not the chef's private notes. In this project: `presentError` in [internal/graph/handler.go](../../../internal/graph/handler.go).
+
+23. **HTTP 422 for limit errors**. gqlgen answers HTTP 200 by default even for rejected queries. Here, limit violations return 422 so gateways and dashboards can see abuse. In this project: `errcode.RegisterErrorType` call in `init` in [internal/graph/limits.go](../../../internal/graph/limits.go).
+
+24. **auth middleware**. A wrapper that checks the `Authorization: Bearer <token>` header (a Cognito ID token) before anything else runs. A bad or missing token gets 401 and the database is never touched. Analogy: the security desk before the lift. In this project: `auth` parameter of `NewHandler` in [internal/graph/handler.go](../../../internal/graph/handler.go); `TestAuth_UnauthenticatedRequestIsRejectedBeforeAnyStoreCall` in [internal/graph/authn_test.go](../../../internal/graph/authn_test.go).
+
+25. **Store interface**. The resolvers do not call the database directly. They call a small Go interface `Store`. Tests plug in a fake store that counts calls; production plugs in the Postgres version. Analogy: a power socket that fits both a test lamp and the real one. In this project: [internal/graph/store.go](../../../internal/graph/store.go) and `PostgresStore` in [internal/graph/pgstore.go](../../../internal/graph/pgstore.go).
