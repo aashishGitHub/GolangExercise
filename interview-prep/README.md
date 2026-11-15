@@ -30,22 +30,19 @@ Use them as reference; the daily files tell you what to study, in what order, an
 | Day | Date | Focus | 2-hour output | Interview value |
 |---|---|---|---|---|
 | 1 | Fri 13 Nov | Go language core, errors, interfaces, testing | One-page mental model + 15 grill answers | 19th concepts |
-| 2 | Sat 14 Nov | Concurrency, context, worker pools, leaks | Working bounded worker pool + race test | 19th coding/concurrency |
-| 3 | Sun 15 Nov | HTTP, API design, Postgres, transactions | Whiteboard request lifecycle + SQL drills | 19th backend depth |
-| 4 | Mon 16 Nov | Messaging + ControlPlane end-to-end | Architecture from memory + 12 decisions | Both rounds |
-| 5 | Tue 17 Nov | Demo rehearsal + architecture defense | Three timed run-throughs (5/10/20 min) | 20th demo |
+| 2 | Sun 15 Nov | Concurrency, context, worker pools, leaks | Run the Day 2 lab + working bounded worker pool | 19th coding/concurrency |
+| 3 | Mon 16 Nov | HTTP, API design, Postgres, transactions | Whiteboard request lifecycle + SQL drills | 19th backend depth |
+| 4 | Tue 17 Nov | Messaging + ControlPlane end-to-end | Architecture from memory + 12 decisions | Both rounds |
+| 5 | Wed 18 Nov | Demo rehearsal + architecture defense | Three timed run-throughs (5/10/20 min) | 20th demo |
 | 6 | Wed 18 Nov | Full mock, behavioral, weak spots | Mock scorecard + six STAR bullets | Both rounds |
 | — | Thu 19 Nov | Interview 1 | 30-minute warm-up only | — |
 | — | Fri 20 Nov | Interview 2 / demo | Run the demo runbook | — |
 
-Weekdays: **2 hours core**. Weekends: 2 hours core, optional 45-minute lab if you feel strong.
-Do not let the optional AWS block eat the Go core. The core is the interview.
+**Current plan:** Day 1a was Sat 14 Nov. Day 2 is Sun 15, Day 3 Mon 16, Day 4 Tue 17. Day 5 and Day 6 share Wed 18: do the demo rehearsal first, then the mock. The 19/20 Nov interview dates do not move.
 
-> **Starting late?** Day 1 and Day 2 each have a beginner companion
-> ([`day-1a-go-core.md`](day-1a-go-core.md), [`day-2a-concurrency.md`](day-2a-concurrency.md)). If a
-> day needs the on-ramp, use the one-day-shifted sequence: Day 2 Sun 15 Nov, Day 3 Mon 16, Day 4 Tue
-> 17. Then use Wed 18 for a compressed Day 5 rehearsal plus the Day 6 mock. The 19/20 Nov interview
-> dates do not move.
+Weekdays: **2 hours core**. Weekends: 2 hours core. If you have about 4 hours for AWS/FE this week, put it in a separate 45–60 minute block **after** the Go core. Do not trade the Go core for it; the core is the interview.
+
+> **If the reading feels long:** run [`day-2b-concurrency-lab.md`](day-2b-concurrency-lab.md) first. It is 23 tiny examples, not a chapter. The lesson files are maps; the lab is the practice. Do not read Day 2, Day 2a, and the lab in one sitting.
 
 ---
 
@@ -54,9 +51,9 @@ Do not let the optional AWS block eat the Go core. The core is the interview.
 | Time | Block | What you actually do |
 |---|---|---|
 | 0:00–0:10 | Cold recall | Close everything. Write yesterday's 5 key ideas from memory. |
-| 0:10–0:50 | Mechanism study | Read the day file section. Stop at each table; say the "why" aloud. |
+| 0:10–0:50 | Mechanism study | Read the day file section, or run one lab example. Stop at each table; say the "why" aloud. |
 | 0:50–1:25 | Active practice | Code, whiteboard, run a demo, or write SQL — not more reading. |
-| 1:25–1:45 | Grill | Answer the day's must-answer questions aloud before opening the answer. |
+| 1:25–1:45 | Grill | Answer the day's must-answer questions aloud, then check the visible rapid answer key. |
 | 1:45–1:55 | Explain-back | Record a 3-minute voice note or write 5 bullets with no notes. |
 | 1:55–2:00 | Log | Add weak spots to [`progress.md`](progress.md). Pick tomorrow's first question. |
 
@@ -72,14 +69,14 @@ Do not let the optional AWS block eat the Go core. The core is the interview.
 1. Read this page.
 2. Open [`controlplane-demo.md`](controlplane-demo.md) and check the preflight list.
 3. Run `docker compose up -d --build --wait` in `../../Avid/ControlPlane` once. Confirm `/healthz`.
-4. Open [`progress.md`](progress.md) and fill the Day 1 row.
+4. Open [`progress.md`](progress.md) and fill the current day's row.
 5. Put the interview dates and times in your calendar with a 30-minute buffer.
 
 ### Each day
 
 - Read the day file top to bottom once. Do not highlight.
 - Do the active practice with the file closed.
-- Answer the grill questions **out loud**. If you cannot say it in 60 seconds, it is not learned.
+- Answer the grill questions **out loud**, then check the rapid answer key. If you cannot say it in 60 seconds, it is not learned.
 - Log red/amber/green in [`progress.md`](progress.md).
 
 ### The last 48 hours
@@ -116,7 +113,10 @@ That sentence alone signals senior judgment.
 | [`day-1-go-core.md`](day-1-go-core.md) | Types, slices, maps, interfaces, errors, testing |
 | [`day-1a-go-core.md`](day-1a-go-core.md) | Beginner on-ramp to Day 1: same concepts, slower pace |
 | [`day-2-concurrency.md`](day-2-concurrency.md) | Goroutines, channels, context, patterns, leaks |
-| [`day-2a-concurrency.md`](day-2a-concurrency.md) | Beginner on-ramp to Day 2: same concepts, slower pace |
+| [`day-2a-concurrency.md`](day-2a-concurrency.md) | Short Day 2 map: core ideas, Q&A, links to the lab and theory |
+| [`day-2b-concurrency-lab.md`](day-2b-concurrency-lab.md) | 23 tiny runnable examples with tested outputs and one-line answers |
+| [`mock-interviews-lab.md`](mock-interviews-lab.md) | Mock Q1 bug tree: race, errgroup, errors, batching, 1M-id shape, 22 runnable examples |
+| [`day-2-theory-cupboard.md`](day-2-theory-cupboard.md) | Optional deep scheduler and memory-model detail; read only after the lab |
 | [`day-3-http-db.md`](day-3-http-db.md) | HTTP, API design, pgx, transactions, Postgres concurrency |
 | [`day-4-messaging-controlplane.md`](day-4-messaging-controlplane.md) | Outbox, inbox, RabbitMQ, failure matrix, decisions |
 | [`day-5-demo-rehearsal.md`](day-5-demo-rehearsal.md) | Demo runbook and three timed versions |
@@ -161,7 +161,7 @@ Your existing Go notes, for optional depth:
 2. **Every claim gets a "why" and a "what breaks".** "I used an outbox" is junior. "I used an outbox because publishing inside the request can commit the DB and lose the event; the cost is relay latency and duplicate delivery, which the consumer already tolerates" is senior.
 3. **The demo is a story, not a feature tour.** Problem → invariant → architecture → live proof → failure proof → tradeoffs.
 4. **Do not claim production readiness.** The README lists the gaps. Naming them before the interviewer does is a strength.
-5. **Stop at 2 hours.** Retention beats volume. The optional AWS block is optional.
+5. **Stop at 2 hours.** Retention beats volume. The AWS/FE block is separate and optional.
 
 ---
 
@@ -170,6 +170,7 @@ Your existing Go notes, for optional depth:
 You are ready if you can do all of these without notes:
 
 - [ ] Draw the architecture and the create/update sequence in under 5 minutes.
+- [ ] Run the Day 2 lab's core examples and explain each output in one line.
 - [ ] Explain `published_at`, `FOR UPDATE SKIP LOCKED`, publisher confirms, and the crash window.
 - [ ] Explain deterministic `message_id`, the inbox, and the rank guard with one example each.
 - [ ] Explain why the unique index beats a pre-check `SELECT`, and why the conditional `UPDATE` beats read-then-write.

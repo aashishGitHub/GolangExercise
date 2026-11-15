@@ -1,6 +1,8 @@
 # Day 2 — Concurrency, context, and the patterns you will be asked to write
 
 > **New to Go?** Read [`day-2a-concurrency.md`](day-2a-concurrency.md) first. It covers the same concepts in the same order, with slower explanations and one example per idea.
+>
+> **Want to run code first?** Use [`day-2b-concurrency-lab.md`](day-2b-concurrency-lab.md). It has 23 tiny examples with tested outputs and one-line interview answers. The deep scheduler and memory-model detail is in [`day-2-theory-cupboard.md`](day-2-theory-cupboard.md).
 
 **Goal:** be able to design, write, and debug bounded concurrent Go without hand-waving. By the end
 you can implement a worker pool with cancellation, explain why every goroutine stops, and name the
@@ -26,6 +28,8 @@ sequential.
 ---
 
 ## 1. The scheduler in one page
+
+**Description.** Go's scheduler multiplexes goroutines (G) onto OS threads (M) through logical processors (P). A P holds a run queue and is required for an M to run Go code; `GOMAXPROCS` sets how many Ps exist. Blocking syscalls can hand the P to another M, and idle Ps steal work.
 
 Go runs goroutines on OS threads using the **G-M-P** model:
 
@@ -57,6 +61,8 @@ context-switch.
 
 ## 2. Channels: semantics, ownership, close
 
+**Description.** A channel is a typed conduit with blocking send and receive operations. Unbuffered channels rendezvous; buffered channels hold up to `cap` values. A nil channel blocks forever, send on a closed channel panics, receive on a closed channel returns the zero value and `false`, and `range` ends only after close and drain.
+
 ```go
 ch := make(chan int)     // unbuffered: send blocks until a receiver is ready
 ch := make(chan int, 8)  // buffered: send blocks only when full
@@ -71,6 +77,8 @@ ch := make(chan int, 8)  // buffered: send blocks only when full
 | `for v := range ch` | Ends when the channel is closed and drained |
 
 ### Unbuffered vs buffered
+
+**Description.** An unbuffered channel is a synchronization point: the send completes only when a receiver is ready, which gives natural backpressure. A buffered channel decouples the two sides up to its capacity, but a full buffer still blocks. The buffer is bounded by design; it is not an unbounded queue and does not fix a missing receiver.
 
 - **Unbuffered** is a rendezvous: it synchronizes sender and receiver and gives natural backpressure.
 - **Buffered** decouples speeds up to a bound. It is not a queue you can grow forever; a full buffer
@@ -89,6 +97,8 @@ default:
 
 ### Ownership and close
 
+**Description.** The sender closes the channel, because close means "no more values will be sent". A receiver closing is a bug: another sender may still send and panic. With multiple senders, wait for all of them and let one goroutine close. Use `context` for cancellation; do not overload close as a cancel signal.
+
 The **sender** closes. A receiver closing is a bug because another sender may still send and panic.
 If there are multiple senders, use a `WaitGroup` and one closer goroutine:
 
@@ -104,6 +114,8 @@ Do not close a channel to signal one receiver if other senders may still use it.
 
 ### Directional channels document intent
 
+**Description.** A function signature can restrict a channel to send-only (`chan<- T`) or receive-only (`<-chan T`). The compiler enforces the direction, so a producer cannot accidentally receive and a consumer cannot accidentally send. It is documentation and a correctness check at the type level.
+
 ```go
 func produce(out chan<- int)
 func consume(in <-chan int)
@@ -114,6 +126,8 @@ Use them in function signatures. They prevent accidental receives/sends and make
 ---
 
 ## 3. `select`: the control plane of a goroutine
+
+**Description.** `select` waits on several channel operations and runs the first one that is ready. If several are ready, it chooses one at random. A `default` case makes it non-blocking, and a nil channel disables its case. It is how a goroutine waits on input, cancellation, and timers at the same time.
 
 ```go
 select {
@@ -159,6 +173,8 @@ for a != nil || b != nil {
 
 ## 4. `context`: cancellation, deadlines, values
 
+**Description.** A context is a cancellation tree that also carries a deadline and request-scoped values. Child contexts are canceled when the parent is; deadlines can only shrink. Pass it as the first parameter, call `cancel` on the way out, and check `Done()` before expensive work and in loops.
+
 `context.Context` carries cancellation, a deadline, and request-scoped values across API boundaries.
 
 ```go
@@ -189,7 +205,11 @@ silently reuse the request context.
 
 ## 5. `sync` and `sync/atomic`
 
+**Description.** The `sync` package provides mutual exclusion and coordination primitives: `Mutex`, `RWMutex`, `WaitGroup`, `Once`, `Cond`, and `Pool`. `sync/atomic` provides lock-free operations on individual words. Choose the primitive whose shape matches the state or handoff you need.
+
 ### Mutex vs channel
+
+**Description.** A mutex guards fields that are read and written in place. A channel transfers ownership of data or signals completion. Use a mutex for counters and caches, a channel for pipelines and handoffs, and `atomic` for a single flag or counter. The primitive should make the invariant obvious.
 
 | Need | Use |
 |---|---|
@@ -204,6 +224,8 @@ silently reuse the request context.
 "Channels for handoff, locks for in-place state." Do not build a counter server out of channels.
 
 ### Rules that show up in interviews
+
+**Description.** These are the `sync` rules that fail under load rather than in a single test: `Add` before `go`, no copying a lock after first use, no reentrant `Lock`, `RWMutex` is not automatically faster, a panic in `Once` counts as done, `Pool` items can be dropped, and atomics protect one word rather than a group of fields.
 
 - `sync.WaitGroup.Add` must happen **before** the `go` statement, not inside the goroutine; otherwise
   `Wait` can race with `Add`.
@@ -220,6 +242,8 @@ silently reuse the request context.
 ---
 
 ## 6. The memory model, races, and what `-race` proves
+
+**Description.** The Go memory model defines when one goroutine's write is guaranteed to be observed by another. Channel send/receive, mutex unlock/lock, `Once`, and atomic operations create happens-before edges. Without an edge, concurrent access with a write is a data race and undefined behavior; `-race` detects some of those, but not logical race conditions.
 
 A **data race** is two goroutines accessing the same memory concurrently, at least one writing, with
 no synchronization. It is undefined behavior in Go, even if it "works" on your machine.
@@ -245,7 +269,11 @@ not prove the absence of races, and it does not detect logical race conditions o
 
 ## 7. Patterns to be able to write from memory
 
+**Description.** These patterns are the vocabulary interviewers expect you to write without an IDE: a bounded worker pool, `SetLimit`, fan-out/fan-in, a pipeline stage, a semaphore, retry with backoff, graceful shutdown, and SSE. Each one is a combination of channels, context, and a stop path, not a separate language feature.
+
 ### Bounded worker pool with `errgroup`
+
+**Description.** Start a fixed number of workers reading from a jobs channel. `errgroup.WithContext` cancels the group on the first error, and `Wait` returns that error. The producer must select on `ctx.Done()` when sending, or it can block after the workers stop, and it closes the jobs channel after the last send.
 
 ```go
 import "golang.org/x/sync/errgroup"
@@ -280,6 +308,8 @@ the derived context when that happens.
 
 ### Bounded concurrency without a worker pool
 
+**Description.** `errgroup.SetLimit(n)` caps in-flight goroutines without an explicit jobs channel. `Go` blocks at the limit, while `TryGo` admits only when a slot is free. It is the smallest correct answer for "run these N calls with a bound".
+
 ```go
 g, ctx := errgroup.WithContext(ctx)
 g.SetLimit(8) // at most 8 goroutines in flight
@@ -297,6 +327,8 @@ return g.Wait()
 Do not launch one goroutine per item without a limit; that is how a spike becomes an outage.
 
 ### Fan-out / fan-in
+
+**Description.** Fan-out sends work to multiple goroutines; fan-in merges several channels into one. Each reader must stop on context cancellation and on input close, and the merge closes its output only after every reader finishes. Fan-in loses ordering because inputs race into the output.
 
 ```go
 func merge[T any](ctx context.Context, chans ...<-chan T) <-chan T {
@@ -339,6 +371,8 @@ single consumer.
 
 ### Pipeline stage
 
+**Description.** A pipeline stage reads from an input channel, transforms values, and writes to an output channel it creates. The stage owns the output and closes it when it returns. Cancellation must be checked on both the input receive and the output send so the stage cannot block when either side stops.
+
 ```go
 func stage(ctx context.Context, in <-chan int) <-chan int {
     out := make(chan int)
@@ -361,6 +395,8 @@ the output send.
 
 ### Semaphore and rate limiter
 
+**Description.** A buffered channel is a counting semaphore: sending acquires a slot and receiving releases it, with the buffer size as the limit. A rate limiter is different: it controls events per unit of time, not simultaneous events. Use `golang.org/x/time/rate` for per-second limits and a semaphore for in-flight bounds.
+
 ```go
 sem := make(chan struct{}, 10)
 select {
@@ -382,6 +418,8 @@ if err := limiter.Wait(ctx); err != nil {
 ```
 
 ### Retry with exponential backoff + jitter
+
+**Description.** Retry only transient errors, bound the attempt count, stop on context cancellation, and increase the delay exponentially. Jitter randomizes the delay so many clients do not retry at the same instant. Do not retry validation failures, not-found, or a request whose context is already canceled.
 
 ```go
 func retry(ctx context.Context, attempts int, fn func() error) error {
@@ -412,6 +450,8 @@ retry in lockstep.
 
 ### Graceful shutdown
 
+**Description.** Shutdown is ordered: fail readiness, stop accepting new work, drain in-flight requests with a deadline, cancel background workers, then close the database and broker. `signal.NotifyContext` supplies the signal-driven context, and `srv.Shutdown` waits for in-flight requests until its context expires. A second signal should force exit.
+
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 defer stop()
@@ -433,6 +473,8 @@ Order: fail readiness, stop accepting, drain in-flight with a deadline, cancel b
 close DB/broker. Let a second signal hard-exit.
 
 ### SSE with client disconnect
+
+**Description.** SSE is one-way server push over HTTP. The handler sets `Content-Type: text/event-stream`, flushes each event, watches `r.Context().Done()` for disconnect, and sends heartbeats so proxies do not time out an idle stream. It is not a WebSocket: the client cannot send messages over the same connection.
 
 ```go
 func stream(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +509,8 @@ for the stream, and handle auth on the initial request. For bidirectional, use W
 ---
 
 ## 8. Leaks and failure modes
+
+**Description.** A goroutine leak is a goroutine blocked forever on a send, receive, lock, or timer. A partial deadlock hangs one path while the rest of the service runs; only a total deadlock triggers the runtime's "all goroutines are asleep" message. Data races, logical races, unbounded queues, and unrecovered panics have different symptoms and different fixes.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -733,9 +777,39 @@ which goroutine sends the INSERT; Postgres decides who wins.
 
 </details>
 
+### Rapid answer key
+
+Use this after answering aloud. The expanded answer above has the full mechanism; the section reference
+points to the denser explanation.
+
+| # | Question | Model answer | Section |
+|---|---|---|---|
+| Q1 | Goroutine vs OS thread? | A goroutine is a runtime-scheduled unit with a small, growable stack; many multiplex onto fewer OS threads, which are kernel-scheduled and have fixed, larger stacks. | §1 |
+| Q2 | What is G-M-P? | G is a goroutine, M is an OS thread, P is a logical processor with a run queue. An M must hold a P to run Go code; `GOMAXPROCS` sets the number of Ps, not goroutines. | §1 |
+| Q3 | Unbuffered vs buffered channel? | Unbuffered is a rendezvous: a send waits for a receiver. Buffered is a bounded queue: a send blocks only when full. A buffer changes timing, not the need for a receiver or a stop path. | §2 |
+| Q4 | Who closes a channel, and what happens on send or receive after close? | The sender closes. Send on a closed channel panics; receive returns the zero value with `ok == false`; closing a closed or nil channel panics. With multiple senders, use one closer after all senders finish. | §2 |
+| Q5 | What does a nil channel do in a `select`? | Its cases block forever, which effectively disables them. Setting a channel variable to nil is a common way to stop selecting on an input after it closes. | §2, §3 |
+| Q6 | If two `select` cases are ready, which runs? | One is chosen uniformly at random. This prevents starvation and accidental priority; if you need priority, nest selects or use an explicit state machine. | §3 |
+| Q7 | Why `defer cancel()` if the context is about to be discarded? | `cancel` releases the timer and the parent's reference to the child context. Without it, the child and its timer can live until the deadline, wasting memory and goroutines. | §4 |
+| Q8 | Mutex or channel? | Mutex for state read and written in place; channel for handing off ownership or signaling completion. Use the primitive that makes the invariant obvious. | §5 |
+| Q9 | What is happens-before, and why do you care? | It is the partial order of memory operations the Go memory model guarantees. If A happens before B, B observes A's writes. Channel send/receive, unlock/lock, `Once`, and atomics create edges. | §6 |
+| Q10 | Data race vs race condition? | A data race is unsynchronized concurrent access with at least one write; it is undefined behavior. A race condition is a timing-dependent correctness bug that can exist even with correct per-access locking. | §6 |
+| Q11 | Why must `WaitGroup.Add` happen before `go`? | `Add` and `Wait` must not race. If `Add` runs inside the goroutine, `Wait` can return before the counter is incremented. Call `Add` in the parent before starting the goroutine. | §5 |
+| Q12 | What does `errgroup.WithContext` do? | It returns a group and a derived context. The first non-nil error cancels the derived context, and `Wait` returns that error. Each goroutine and the producer must still observe the context. | §7 |
+| Q13 | How do you bound concurrency? | Use a fixed worker pool, `errgroup.SetLimit`, or a buffered-channel semaphore. Never start one goroutine per item without a limit. Size CPU-bound work near `GOMAXPROCS`; size I/O-bound work to the downstream limit. | §7 |
+| Q14 | How do you find a goroutine leak? | Watch `runtime.NumGoroutine`, take a stack dump with `SIGQUIT` or `pprof/goroutine?debug=2`, and use `goleak` in tests. Look for blocked sends or receives, missing cancellation, and tickers that are never stopped. | §8 |
+| Q15 | Why is `time.After` in a loop a problem? | Each call creates a timer. In a long-running loop, timers and their channels can accumulate until they fire. Use a `time.Ticker` or `time.NewTimer` and stop or reset it. | §3, §8 |
+| Q16 | What happens if a goroutine panics and nobody recovers? | The whole process crashes. A recover only helps when called directly in a deferred function in that goroutine, so recover at deliberate boundaries rather than around every call. | §8 |
+| Q17 | Why does the ControlPlane consumer process deliveries sequentially? | One unacked delivery per loop keeps ordering and failure classification simple. A crash causes one redelivery, and the database remains the correctness boundary across replicas. | §11 |
+| Q18 | Why does the worker use prefetch 1? | At most one unacked task is in flight, so the worker does not hoard work and a crash causes one redelivery. It also keeps the failure matrix easy to reason about. | §11 |
+| Q19 | What is the biggest concurrency mistake in a Go web service? | Launching unbounded goroutines or requests without a bound, a context, and a shutdown path. The service looks fine until load or a slow dependency turns the queue into an outage. | §7, §8 |
+| Q20 | Why is Go concurrency not the fix for the slug race? | The race is across processes and replicas, so a per-process mutex cannot protect it. A Postgres unique index or a conditional `UPDATE` is the arbiter; Go only issues the statement with bounded concurrency. | §11 |
+
 ---
 
 ## 11. ControlPlane tie-in
+
+**Description.** This section maps each Day 2 mechanism to the file that implements it and to the senior point it supports. Concurrency is used for I/O overlap, cancellation, reconnects, and shutdown; correctness across replicas is still enforced by Postgres constraints and conditional updates. The one-sentence interview answer is that Go's job is to issue database statements with bounded concurrency and to stop cleanly.
 
 | Mechanism | File | Senior point |
 |---|---|---|

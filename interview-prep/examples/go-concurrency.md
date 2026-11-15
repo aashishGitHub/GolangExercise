@@ -12,6 +12,8 @@ prevents, and the sentence to say in the interview.
 
 ## 1. Bounded worker pool — the default answer
 
+**Description.** A bounded worker pool starts a fixed number of goroutines that read jobs from one channel. A producer owns the channel and closes it; workers select on the job channel and `ctx.Done()`, and `errgroup.WithContext` returns the first real processing error. It is the default answer when work is a stream, workers should be reused, or admission needs its own policy.
+
 **Prompt:** "Process N jobs with at most W workers, stop on the first error, and respect cancellation."
 
 ```go
@@ -92,6 +94,8 @@ you want to reuse the goroutines, or when ordering/admission needs its own polic
 
 ## 2. Bounded concurrency with `SetLimit`
 
+**Description.** `errgroup.SetLimit(n)` caps how many goroutines the group may run at once without a separate jobs channel. `Go` blocks when the limit is reached, so it is the shortest correct answer for "run these calls with a bound." Remember that it bounds goroutines, not downstream connections or file descriptors.
+
 ```go
 func fetchAll(parent context.Context, urls []string) error {
 	g, ctx := errgroup.WithContext(parent)
@@ -121,6 +125,8 @@ eight goroutines can still exhaust a four-connection pool. Bound at the resource
 ---
 
 ## 3. Fan-out / fan-in — merge without leaking
+
+**Description.** Fan-in merges several input channels into one output channel. One coordinator waits for every input reader and closes the output exactly once; each reader selects on its input and on cancellation. The merge loses ordering because inputs race into the output, so carry a sequence number if order matters.
 
 ```go
 func merge[T any](ctx context.Context, chans ...<-chan T) <-chan T {
@@ -172,6 +178,8 @@ coordinator waits for all inputs, then closes.
 ---
 
 ## 4. Pipeline — each stage owns its output
+
+**Description.** A pipeline is a chain of stages, each reading an input channel and writing an output channel it creates. The stage owns and closes its output; cancellation must be checked on both the receive and the send. Composing stages this way gives backpressure and a clean stop path for the whole chain.
 
 ```go
 func generate(ctx context.Context, nums ...int) <-chan int {
@@ -238,6 +246,8 @@ wedge the whole pipeline.
 
 ## 5. Weighted semaphore
 
+**Description.** `semaphore.Weighted` is a counting semaphore where each acquisition costs a configurable number of units, which fits operations with different costs such as payload size in MB. `Acquire` blocks or returns when the context is canceled; `TryAcquire` is for load shedding, not correctness. Release every successful acquisition.
+
 ```go
 import "golang.org/x/sync/semaphore"
 
@@ -271,6 +281,8 @@ Do not use it for correctness.
 ---
 
 ## 6. Retry — classify, bound, jitter, respect context
+
+**Description.** A retry helper classifies the error, bounds the attempt count, waits with exponential backoff plus jitter, and stops when the context is canceled. Only transient failures should be retryable; a validation error or an already-canceled request must return immediately. The jitter prevents synchronized retry storms.
 
 ```go
 func Retry(
@@ -353,6 +365,8 @@ second bound."*
 
 ## 7. SSE with client disconnect and heartbeats
 
+**Description.** An SSE handler holds an HTTP response open, writes `text/event-stream` frames, and flushes each one. It must watch `r.Context().Done()` for disconnect, send heartbeats through idle proxies, disable buffering, and bound the per-client queue so a slow browser cannot grow memory without limit. SSE is one-way; bidirectional traffic needs WebSocket.
+
 ```go
 func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -408,6 +422,8 @@ Why each piece:
 ---
 
 ## 8. Graceful shutdown — ordered, deadline-bound
+
+**Description.** Shutdown stops accepting HTTP work, drains in-flight requests with a deadline, cancels background workers, and closes the database and broker in order. A second signal should force an immediate exit. The important part is the order and the deadline, not the signal handler itself.
 
 ```go
 // cm, logger, handler, and the store/outbox packages are wired elsewhere.
@@ -483,6 +499,8 @@ reconnect. A second signal is the escape hatch.
 ---
 
 ## 9. Leak fixes — recognize these on sight
+
+**Description.** These are the recurring goroutine-leak shapes: a timer allocated in a hot loop, a send with no receiver or cancellation path, a missing `cancel`, `WaitGroup.Add` inside the goroutine, an unbounded goroutine per request, and `range` over a channel nobody closes. Each fix gives the goroutine a stop path or bounds its creation.
 
 ### 9.1 `time.After` in a hot loop
 
@@ -607,6 +625,8 @@ If there are multiple senders, use a `WaitGroup` and one closer goroutine.
 ---
 
 ## 10. Race test — what to run and what it proves
+
+**Description.** A race test runs concurrent operations under `go test -race` and checks the final invariant. The detector reports unsynchronized accesses that actually executed during that run; it does not prove the absence of races and cannot see a logical race built from correctly locked steps. Use `WaitGroup` or channels for synchronization, not `time.Sleep`.
 
 ```go
 func TestConcurrentCounter(t *testing.T) {

@@ -623,6 +623,23 @@ and a completed `make check` quality gate. Keep the correctness core unchanged.
 
 </details>
 
+### Rapid answer key
+
+| # | Question | Model answer |
+|---|---|---|
+| 1 | Why is the task row the outbox? | The task already needs durability; `published_at IS NULL` adds delivery state, so one row is work record and event, at the cost of shared retention. |
+| 2 | Why 201 for create and 202 for patch/delete? | Create leaves the tenant existing synchronously; patch and delete only start async work, and the body exposes the in-flight state. |
+| 3 | Why one open task per tenant? | Status guards prevent conflicting lifecycle operations; the partial unique index is the cross-process safety net. |
+| 4 | Why tombstones instead of deleting tenant rows? | Keeping the row lets `UNIQUE(slug)` cover destroyed tenants for free; deleting needs a separate taken-slugs structure. |
+| 5 | Why UUIDv7 for row IDs? | Time-ordered IDs give B-tree locality and a valid keyset cursor; UUIDv4 is random and worse for pagination. |
+| 6 | Why not Kafka? | RabbitMQ's ack, requeue, and DLX map directly to the poison/transient model; Kafka needs retry/DLQ topics and offset management. |
+| 7 | What is the most subtle bug in the design? | Holding a Postgres transaction open across broker I/O is deliberate for the row lock, but it risks lock duration; bound batches, set timeouts, and monitor lock age. |
+| 8 | Publish succeeds but the mark or commit fails. What happens? | The row stays unpublished and is republished; that is a duplicate, not a loss, and the inbox absorbs it. |
+| 9 | What if the worker task message is malformed? | The worker dead-letters it, but `worker.tasks` currently has no DLQ or delivery limit, which is a known hardening gap. |
+| 10 | How did you test the impossible-to-mock parts? | Real Postgres and RabbitMQ for constraints, locks, confirms, and DLQ behavior; mocks would not prove those. |
+| 11 | Why does the lifecycle test need a separate database and vhost? | The dev relay polls the same Postgres and could claim test outbox rows; isolate both and serialize packages with an advisory lock. |
+| 12 | What would you do with more time? | Add a reaper, migrations, auth/RBAC/TLS, metrics, a worker DLQ, retention, dedicated tests, and a complete `make check`. |
+
 ---
 
 ## 11. If they ask about your other Go work

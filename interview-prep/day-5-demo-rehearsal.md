@@ -25,6 +25,8 @@ tradeoffs.** Every command should answer "what does this prove?"
 
 ## 1. The story arc
 
+**Description.** The demo is a six-part argument: problem, invariant, architecture, live proof, failure proof, and tradeoffs. Every command should answer "what does this prove?" The opening names the hard problem and the guarantee; the architecture explains the outbox, relay, worker, and consumer; the failure proof shows the invariants surviving concurrency, duplication, staleness, and poison.
+
 ### 30-second opening
 
 > "This is a tenant provisioning control plane. The interesting part isn't creating a tenant — it's
@@ -154,7 +156,11 @@ If you run over, cut the delete flow, not the failure proof. The failure proof i
 
 ## 4. Failure rehearsal
 
+**Description.** The failure rehearsal proves that correctness does not depend on the happy path. The race demo shows the unique index and conditional `UPDATE` arbitrating concurrent writes; the duplicate, stale, and poison demos show the inbox, rank guard, and DLQ handling redelivery and bad messages. Predict the result before running it, then show the prediction was right.
+
 ### Race demo
+
+**Description.** The race demo fires 50 concurrent creates with the same slug and 50 concurrent patches at the same version. Exactly one create and one patch should win; the rest receive conflicts. The point is that no Go mutex is doing the arbitration: the Postgres unique index and the conditional `UPDATE` are the concurrency control.
 
 ```bash
 make race-demo
@@ -176,6 +182,8 @@ Say: "No application mutex. The unique index and the conditional UPDATE are the 
 get a domain error, not a silent lost update."
 
 ### Duplicate, stale, poison
+
+**Description.** These three injections exercise different defenses. A duplicate terminal update is deduplicated by the inbox `message_id`; a stale lower-rank update is rejected by the rank guard; malformed JSON is dead-lettered because retrying it can never succeed. In each case, the tenant version should remain unchanged unless a valid terminal transition actually applied.
 
 Get a task and tenant ID from a completed tenant:
 
@@ -203,6 +211,8 @@ guard makes it a no-op" before running. Then show it. That is the senior move.
 
 ### Optional: failure rate
 
+**Description.** Setting `FAIL_RATE=1` makes the worker report a terminal failure, which should move the tenant to `failed` through the same outbox, rank guard, and tenant mapping. It is optional because it takes time and leaves the stack in a failed state; use it only in the longer demo to show the failure path end to end.
+
 ```bash
 make worker-restart FAIL_RATE=1
 # create a tenant -> deploy fails -> tenant failed
@@ -216,7 +226,11 @@ Only include this in the 20-minute version. It takes time and can leave the stac
 
 ## 5. Whiteboard from memory
 
+**Description.** The whiteboard is the compact version of the architecture: client to API to Postgres, the outbox row, the relay to RabbitMQ to the worker, progress back through the consumer, and poison to the DLQ. Label the guarantee on each arrow, then mark the crash points and say how each one recovers.
+
 ### Boxes and arrows
+
+**Description.** Draw left to right so the request path and the asynchronous return path are visually separate. The critical labels are the transaction boundary at Postgres, publisher confirm plus `mandatory` at the broker, deterministic `message_id` at the worker, and inbox plus rank guard plus lock order at the consumer.
 
 Draw left to right:
 
@@ -241,6 +255,8 @@ Label the guarantees on the arrows:
 - Poison → DLQ.
 
 ### Create sequence
+
+**Description.** The sequence diagram makes the asynchronous gaps explicit: the API commits tenant and task before returning, the relay claims and publishes after commit, and the consumer applies progress in a separate transaction. The six `X` marks are the crash points; for each one, the recovery is either rollback, republish, redelivery, or inbox deduplication.
 
 ```text
 Client        API            Postgres        Relay          Broker        Worker        Consumer
@@ -398,6 +414,26 @@ is still Postgres, not goroutines. If the team were Python-heavy, the same desig
 is not the differentiator.
 
 </details>
+
+### Rapid answer key
+
+| # | Question | Model answer | Section |
+|---|---|---|---|
+| 1 | Why not publish directly in the request? | Publish-before-commit can expose a rolled-back tenant; commit-before-publish can lose the event. The outbox makes publish-after-commit structural. | §1 |
+| 2 | Why is the task row the outbox? | The task already needs durability; `published_at IS NULL` adds delivery state so one row is both work record and event. | §1 |
+| 3 | Why `SKIP LOCKED`? | It lets relay replicas claim disjoint batches without blocking; the transaction-scoped lock stays held through publish and mark. | §4 |
+| 4 | Why confirms plus `mandatory`? | A nil publish only means bytes reached the socket; a confirm means the broker accepted, and `mandatory` catches unroutable messages. | §1 |
+| 5 | Why deterministic message IDs? | Retries and redeliveries of the same logical update must produce the same inbox key; UUIDv5 from task and status does that. | §1 |
+| 6 | Why both inbox and rank guard? | The inbox deduplicates the same message; the rank guard rejects different messages that arrive out of order. | §1 |
+| 7 | Why not exactly-once? | Postgres and RabbitMQ cannot share an atomic transaction; at-least-once plus idempotent apply gives an effectively-once business effect. | §1 |
+| 8 | What if the broker is down? | The API keeps accepting and outbox rows accumulate; the relay retries and drains the backlog when the broker returns. | §4 |
+| 9 | What if the worker crashes mid-task? | The unacked task is requeued; replay is harmless because of deterministic IDs and the rank guard. | §4 |
+| 10 | What if the consumer crashes mid-transaction? | The transaction rolls back and the message is redelivered; inbox and state change commit together. | §4 |
+| 11 | Why lock tenant before task? | A consistent lock order prevents ABBA deadlocks across the API and consumer paths. | §4 |
+| 12 | Why can the worker not touch the DB? | The worker is untrusted and stateless; the consumer owns task existence, tenant mapping, and state transitions. | §1 |
+| 13 | What is the biggest gap? | No stuck-task reaper or heartbeat, plus no auth/RBAC, migrations tool, metrics, or DLQ on `worker.tasks`. Name them first. | §1 |
+| 14 | How would you scale it? | Batch confirms, shard workers by tenant, add a reaper, archive published rows, add retention, metrics, auth, and rate limits. | §1 |
+| 15 | Why Go? | The workload is I/O-bound and concurrency-heavy; Go fits with explicit concurrency and small deployments, but Postgres still enforces correctness. | §1 |
 
 ---
 

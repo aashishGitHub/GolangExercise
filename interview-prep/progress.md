@@ -19,7 +19,7 @@ Fill this in at the end of each session. Two minutes of honest logging beats ano
 | Technical round | Thu 19 Nov 2026 |
 | Demo round | Fri 20 Nov 2026 |
 | Core budget | 2 hours/day |
-| Optional AWS | 30–45 min, only after the core |
+| Optional AWS/FE | up to ~4 hours this week, only after the core |
 | Primary repo | `C:\PROJECT\aashishGithub\Avid\ControlPlane` |
 | Notebook | `C:\PROJECT\aashishGithub\GolangExercise\interview-prep` |
 
@@ -30,10 +30,10 @@ Fill this in at the end of each session. Two minutes of honest logging beats ano
 | Day | Date | Focus | Min | Cold recall (1–5) | Practice done | Grill G/A/R | Explain-back (1–5) | One weak spot | Tomorrow's first question |
 |---|---|---|---:|---:|---|---|---|---|---|
 | 1 | Fri 13 Nov | Go core, errors, interfaces, testing | | | | | | | |
-| 2 | Sat 14 Nov | Concurrency, context, pools, leaks | | | | | | | |
-| 3 | Sun 15 Nov | HTTP, API design, Postgres, transactions | | | | | | | |
-| 4 | Mon 16 Nov | Messaging, outbox/inbox, ControlPlane | | | | | | | |
-| 5 | Tue 17 Nov | Demo rehearsal (5/10/20 min) | | | | | | | |
+| 2 | Sun 15 Nov | Concurrency, context, pools, leaks | | | | | | | |
+| 3 | Mon 16 Nov | HTTP, API design, Postgres, transactions | | | | | | | |
+| 4 | Tue 17 Nov | Messaging, outbox/inbox, ControlPlane | | | | | | | |
+| 5 | Wed 18 Nov | Demo rehearsal (5/10/20 min) | | | | | | | |
 | 6 | Wed 18 Nov | Full mock, behavioral, weak spots | | | | | | | |
 
 **G/A/R** = green / amber / red count from that day's grill. A day with zero reds is suspicious; you
@@ -64,10 +64,11 @@ Score: ___ / 5. One thing to re-explain tomorrow: ______________________________
 ## Day 2 — Concurrency
 
 > **Remediation note (Sat 14 Nov):** If the scheduler, channel, or memory-model sections felt too
-> dense, read [`day-2a-concurrency.md`](day-2a-concurrency.md) before the drills. It covers the same
-> concepts in the same order. Do not double up: keep the shifted schedule and move on to Day 3 on
-> Mon 16 Nov.
+> dense, run [`day-2b-concurrency-lab.md`](day-2b-concurrency-lab.md) first, then read
+> [`day-2a-concurrency.md`](day-2a-concurrency.md). The lab is 23 tiny examples; the lesson file is the
+> map. Do not double up: keep the shifted schedule and move on to Day 3 on Mon 16 Nov.
 
+- [ ] Ran the core lab examples in [`day-2b-concurrency-lab.md`](day-2b-concurrency-lab.md); predicted the output before running.
 - [ ] Read [`day-2a-concurrency.md`](day-2a-concurrency.md); said the 21 Remember lines aloud.
 - [ ] Drew G-M-P and explained `GOMAXPROCS` in a container.
 - [ ] Wrote `RunPool` from memory, including producer close and cancellation.
@@ -76,7 +77,7 @@ Score: ___ / 5. One thing to re-explain tomorrow: ______________________________
 - [ ] Wrote retry with classification, bound, jitter, context.
 - [ ] Explained SSE cleanup and the `WriteTimeout` trap.
 - [ ] Listed five leak patterns.
-- [ ] Ran a race test with `-race -count=100`.
+- [ ] Ran a race test with `-race -count=100` on Linux/CI, or explained why Windows needs CGO + a C compiler.
 - [ ] Explained why Postgres, not a Go mutex, wins the ControlPlane races.
 
 Score: ___ / 5. Leak pattern I missed: ______________________________.

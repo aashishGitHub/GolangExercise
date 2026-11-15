@@ -26,6 +26,8 @@ concurrency, pool sizing, transaction boundaries, unique-index arbitration, cond
 
 ### Timeouts are not optional
 
+**Description.** `http.Server` has separate timeouts for reading headers, reading the full request, writing the response, and idle keep-alive connections. `ReadHeaderTimeout` protects against slowloris; `WriteTimeout` must be disabled or handled per-route for streaming. A socket timeout does not cancel the handler's work, so context propagation is still required.
+
 ```go
 srv := &http.Server{
     Addr:              ":8080",
@@ -45,6 +47,8 @@ srv := &http.Server{
 - `http.TimeoutHandler` buffers the whole response and is not suitable for streaming.
 
 ### Graceful shutdown
+
+**Description.** On SIGTERM, stop accepting new connections, let in-flight requests finish within a deadline, then close the database and broker. `srv.Shutdown(ctx)` performs the stop-and-drain step; it does not wait forever, so the context deadline is the bound. In Kubernetes, fail readiness before draining.
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -68,6 +72,8 @@ first, then drain; do not rely on a hard kill.
 
 ### Middleware order
 
+**Description.** Middleware wraps the handler outside-in, so order changes behavior. Request ID should run first for correlation, recoverer should catch panics before logging, auth and rate limits should reject before expensive body work, and the body limit should run before JSON decoding. A timeout wraps the business handler.
+
 Typical order, outside in:
 
 1. Request ID — every later log/error can correlate.
@@ -82,6 +88,8 @@ Order is a design decision: if auth is inside the body limit, an unauthenticated
 make you buffer a large body. If recoverer is inside logging, the log may never see the panic.
 
 ### JSON decoding
+
+**Description.** Decode into a typed request struct, cap the body with `http.MaxBytesReader`, and reject trailing JSON so `{} {}` is not silently accepted. `DisallowUnknownFields` is a strictness choice: it catches typos but breaks clients that add forward-compatible fields. Malformed JSON is 400; well-formed JSON that fails business rules is 422.
 
 ```go
 r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -115,6 +123,8 @@ Distinguish:
 
 ### Error envelope
 
+**Description.** An error response should carry a stable machine-readable `code`, a human-readable `message`, optional field-level `details`, and a `request_id`. Clients branch on the code; humans read the message; support searches by request ID. Never leak SQL, driver, or stack details in the public response.
+
 A stable machine-readable code is more useful than a prose message:
 
 ```json
@@ -137,6 +147,8 @@ field-level validation, not stack traces.
 
 ### 201 vs 202
 
+**Description.** `201 Created` means the resource exists when the response is sent, and should include `Location`. `202 Accepted` means the request was accepted but the work is asynchronous, so the response should expose the current state. The distinction is about what is true at response time, not about whether the handler returned quickly.
+
 - **201 Created** — the resource exists synchronously when the response is sent. Include `Location`.
 - **202 Accepted** — the request was accepted, but the work is asynchronous. The response should show
   the current state (`updating`) so the client is not guessing.
@@ -146,11 +158,15 @@ ControlPlane: `POST` is 201 because tenant + deploy task are committed before re
 
 ### PUT vs PATCH
 
+**Description.** `PUT` replaces the whole resource (or creates it at a known URI) and should be idempotent. `PATCH` applies a partial update; it is not automatically idempotent, but a version-guarded patch can be. Choose by the client's intent, not by which verb is shorter.
+
 - `PUT` replaces the resource (or creates it at a known URI); it should be idempotent.
 - `PATCH` applies a partial update. It is not automatically idempotent, but a well-designed patch with
   a version token can be.
 
 ### Optimistic concurrency: version vs ETag
+
+**Description.** Optimistic concurrency prevents lost updates by making the write conditional on the version the client read. A body `version` field is explicit and easy for JSON clients; `ETag` plus `If-Match` is the HTTP-native equivalent and works for any representation. A stale version must return 409, not silently overwrite.
 
 ControlPlane uses a `version` integer in the body:
 
@@ -176,6 +192,8 @@ supported by proxies than a header; ControlPlane accepts it, but `If-Match` is t
 
 ### Idempotency keys for unsafe retries
 
+**Description.** An idempotency key is a client-generated identifier stored by the server with the original response. If the same key arrives again with the same payload, the server returns the stored result instead of repeating side effects; a different payload is a conflict. It solves duplicate requests after a timeout, while versioning solves lost updates on an existing resource.
+
 A client may retry a `POST` after a timeout and not know whether the first request committed. An
 `Idempotency-Key` header lets the server store the key and the original response:
 
@@ -187,6 +205,8 @@ This is different from optimistic concurrency: idempotency prevents duplicate si
 prevents lost updates.
 
 ### Pagination: keyset, not OFFSET
+
+**Description.** Keyset pagination uses the last seen sort key as the cursor: `WHERE id > $cursor ORDER BY id LIMIT $n`. It stays stable when rows are inserted or deleted and does not scan and discard earlier rows the way `OFFSET` does. The cursor should be opaque, validated, and tied to the sort order and index.
 
 ```sql
 SELECT id, slug, name, status, version, created_at, updated_at
@@ -205,6 +225,8 @@ LIMIT $3;
 
 ### Validation and normalization
 
+**Description.** Validate input at the HTTP boundary, enforce invariants in the domain and database, and normalize once so two layers do not disagree. A regex check in the handler is not a substitute for a unique index or a `CHECK` constraint, because only the database sees every concurrent writer.
+
 Validate at the edge, enforce invariants in the database. The slug regex belongs in the domain and the
 DB `CHECK`; the unique index is the final arbiter. Normalize case/whitespace deliberately; do not let
 two layers disagree.
@@ -214,6 +236,8 @@ two layers disagree.
 ## 3. pgx and transaction boundaries
 
 ### Pool, not a global connection
+
+**Description.** `pgxpool.Pool` is a concurrency-safe pool that should be created once and shared; opening a connection per request defeats pooling and exhausts the database. Size it as a queueing problem, not "bigger is better": more connections add contention and memory. Set max lifetime, idle time, and health checks so stale connections are recycled.
 
 ```go
 pool, err := pgxpool.New(ctx, databaseURL)
@@ -236,6 +260,8 @@ Pool sizing is a queueing problem, not "bigger is better":
 - Set `MaxConnLifetime`, `MaxConnIdleTime`, and a health check period so stale connections are recycled.
 
 ### The `DB` interface and `WithTx`
+
+**Description.** `*pgxpool.Pool` and `pgx.Tx` both implement `Exec`, `Query`, and `QueryRow`, so a small `DB` interface lets store functions run standalone or inside a caller-owned transaction. The service layer decides where the transaction begins and ends; the store never commits. `defer tx.Rollback` guarantees cleanup on every error or panic path.
 
 ```go
 type DB interface {
@@ -274,6 +300,8 @@ Why this shape:
 
 ### `QueryRow`, `ErrNoRows`, `RowsAffected`
 
+**Description.** `QueryRow` scans one row and returns `pgx.ErrNoRows` when the query matches nothing. For conditional writes, `RowsAffected` tells you whether the `WHERE` matched; zero rows is a signal to re-read and disambiguate. `RETURNING` can avoid a second read when the caller needs the updated row.
+
 ```go
 row := db.QueryRow(ctx, `SELECT ... WHERE id = $1`, id)
 var t Tenant
@@ -299,6 +327,8 @@ the UPDATE matched nothing.
 
 ### Unique violations
 
+**Description.** Postgres reports a unique violation with SQLSTATE `23505`; foreign-key violations are `23503`, serialization failures `40001`, and deadlocks `40P01`. Detect them with `errors.As` on `*pgconn.PgError` and map only the codes you have a policy for. String-matching the message is brittle and localized.
+
 ```go
 var pgErr *pgconn.PgError
 if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -311,6 +341,8 @@ Do not string-match the error message. `23505` is `unique_violation`; `23503` is
 for; let the rest become 500 with a logged cause.
 
 ### Statement timeouts and cancellation
+
+**Description.** Put a context timeout on each query or transaction and set `statement_timeout` at the role or session level as a backstop. The context cancels the client-side wait, while the server-side timeout stops the query even if the client disconnects. A query that ignores cancellation can keep locks and a connection after the request is gone.
 
 Set a per-query or per-transaction timeout:
 
@@ -327,6 +359,8 @@ cancellation can hold locks and connections after the client is gone.
 ## 4. Postgres concurrency — the part interviewers push on
 
 ### MVCC and isolation
+
+**Description.** Postgres uses multiversion concurrency control: readers see a snapshot, and writers create new row versions instead of overwriting in place. Read Committed takes a snapshot per statement, Repeatable Read per transaction, and Serializable adds SSI predicate checks that can abort with `40001`. Higher isolation prevents more anomalies but requires a retry policy.
 
 Postgres uses MVCC: readers see a snapshot, writers create new row versions. The default isolation is
 **Read Committed**: each statement sees a snapshot taken at the start of that statement.
@@ -347,6 +381,8 @@ reach for Serializable without a retry policy and a measured need.
 
 ### Unique index as the arbiter
 
+**Description.** A unique index is evaluated atomically at insert time, so two concurrent inserts with the same key cannot both commit: one succeeds, the other gets `23505`. This works across processes and replicas, unlike an in-process mutex, and it removes the read-then-write gap that a pre-check `SELECT` leaves open.
+
 ```sql
 INSERT INTO tenants (id, slug, name, status, version)
 VALUES ($1, $2, $3, 'provisioning', 1);
@@ -361,6 +397,8 @@ sense of safety.
 violation to a domain error; it does not try to serialize the race in Go."
 
 ### Conditional UPDATE instead of read-then-write
+
+**Description.** A conditional `UPDATE ... WHERE version = $v AND status = $s` makes the check and the write one atomic statement, so two clients cannot both read the same version and overwrite each other. If it affects zero rows, re-read to distinguish not-found, wrong-state, and stale-version before choosing 404 or 409.
 
 Bad:
 
@@ -398,6 +436,8 @@ zero-rows result alone cannot tell you why.
 
 ### Row locks and lock ordering
 
+**Description.** `SELECT ... FOR UPDATE` locks the selected rows until the transaction commits or rolls back, which lets you read, decide, and write across multiple statements. Every code path must acquire locks in the same order, or two paths can deadlock in an ABBA pattern. Keep the transaction short, and retry the whole transaction after `40P01`.
+
 `SELECT ... FOR UPDATE` locks the selected rows until the transaction ends. Use it when you need to
 read, decide, and write atomically across multiple statements.
 
@@ -408,6 +448,8 @@ read, decide, and write atomically across multiple statements.
   transaction, not just the statement.
 
 ### `SKIP LOCKED` for queues
+
+**Description.** `FOR UPDATE SKIP LOCKED` claims rows for a queue: each transaction locks a batch and concurrent workers skip rows already locked, so replicas claim disjoint work. The lock is transaction-scoped, so the claim, publish, and mark must share one transaction. It is not appropriate for queries that must eventually see every row.
 
 ```sql
 SELECT id, tenant_id, type, status, created_at, updated_at, tenant_slug, tenant_name
@@ -427,6 +469,8 @@ FOR UPDATE SKIP LOCKED;
 
 ### Partial unique indexes
 
+**Description.** A partial unique index enforces uniqueness only for rows matching a predicate, such as "at most one open task per tenant". Historical rows are excluded, so the constraint expresses a state invariant without blocking new work. The service's status guards remain the primary check; the index is the cross-process safety net.
+
 ```sql
 CREATE UNIQUE INDEX tasks_one_open_per_tenant
 ON tasks (tenant_id)
@@ -439,10 +483,14 @@ make invalid states unrepresentable.
 
 ### Keyset pagination and indexes
 
+**Description.** The index must match the filter and the sort order: `(id)` for an unfiltered list, `(status, id)` for a status-filtered list. `WHERE id > $1 ORDER BY id LIMIT $2` can walk the index instead of scanning discarded rows. Verify the plan with `EXPLAIN (ANALYZE, BUFFERS)` rather than guessing.
+
 `WHERE id > $1 ORDER BY id LIMIT $2` uses the primary key index. For `WHERE status = $1 AND id > $2
 ORDER BY id`, create `(status, id)`. Verify with `EXPLAIN (ANALYZE, BUFFERS)`; do not guess.
 
 ### UUIDv7 vs UUIDv4
+
+**Description.** UUIDv7 embeds a timestamp, so values sort roughly by creation time and give better B-tree locality and keyset pagination. UUIDv4 is random: fine for uniqueness, worse for index locality and range scans. UUIDv5 is deterministic from a namespace and name, which is why it fits idempotent message IDs rather than row IDs.
 
 - UUIDv7 is time-ordered: good for keyset pagination and index locality.
 - UUIDv4 is random: fine for uniqueness, worse for B-tree locality and range pagination.
@@ -450,6 +498,8 @@ ORDER BY id`, create `(status, id)`. Verify with `EXPLAIN (ANALYZE, BUFFERS)`; d
   same logical update must produce the same key. Different jobs, different tools.
 
 ### N+1 and query shape
+
+**Description.** An N+1 is one query to list N parents followed by N queries for their children, which turns one logical read into N+1 round trips. Fix it with a join, an `IN` batch, or a DataLoader-style layer that batches keys. Use `EXPLAIN` to check row estimates, index usage, and whether a sequential scan is appropriate for the table size.
 
 An N+1 is one query to list N parents, then N queries for children. Fix with a join, `IN`, a batched
 query, or a DataLoader-style batching layer. `EXPLAIN` the actual query; check row estimates, index
@@ -692,9 +742,36 @@ only if the operation is safe/idempotent.
 
 </details>
 
+### Rapid answer key
+
+| # | Question | Model answer | Section |
+|---|---|---|---|
+| Q1 | Why 201 for create but 202 for PATCH/DELETE? | 201 means the resource exists at response time; 202 means the request was accepted but the work is asynchronous. | §2 |
+| Q2 | 400 vs 422 vs 409? | 400 is malformed, 422 is well-formed but fails business validation, 409 conflicts with current state. | §1, §2 |
+| Q3 | Why use an idempotency key if you already have a version? | Version prevents lost updates on an existing resource; an idempotency key prevents duplicate side effects from a retried unsafe request. | §2 |
+| Q4 | PATCH vs PUT? | PUT replaces the resource and is idempotent; PATCH applies a partial change and is idempotent only when version-guarded. | §2 |
+| Q5 | Why is a DELETE body questionable? | Proxies and clients do not forward DELETE bodies reliably; `If-Match` or a query parameter is more interoperable. | §2 |
+| Q6 | Why not `OFFSET` pagination? | It scans and discards rows and suffers page drift; keyset uses an indexed `id > cursor` and is stable under writes. | §2 |
+| Q7 | How do you size a Postgres pool? | Start small, use Little's Law as a sanity check, respect `max_connections`, account for every replica, and use PgBouncer if needed. | §3 |
+| Q8 | Why does the service own the transaction boundary? | A use case spans multiple store calls that must commit or roll back together; otherwise a crash leaves partial state. | §3 |
+| Q9 | Why `defer tx.Rollback` after `Begin`? | It cleans up on every error or panic path and is a no-op after a successful commit. | §3 |
+| Q10 | Why a unique index instead of a pre-check SELECT? | A pre-check has a read-then-write race; the unique index is atomic at INSERT and works across replicas. | §4 |
+| Q11 | A conditional UPDATE returns zero rows. Now what? | Re-read and disambiguate: 404 missing, 409 wrong status, 409 stale version. | §4 |
+| Q12 | `FOR UPDATE` vs `SKIP LOCKED`? | `FOR UPDATE` blocks concurrent access to selected rows; `SKIP LOCKED` lets queue consumers claim disjoint batches. | §4 |
+| Q13 | Why must outbox claim, publish, and mark share one transaction? | Row locks are transaction-scoped; one transaction keeps the claim exclusive and marks `published_at` only after a confirm. | §4 |
+| Q14 | Why lock tenant before task? | A consistent lock order prevents ABBA deadlocks across the API and consumer paths. | §4 |
+| Q15 | What isolation level does ControlPlane need? | Read Committed, because unique indexes and conditional updates enforce the invariants; Serializable would add `40001` retries. | §4 |
+| Q16 | What is write skew? | Two transactions each read a condition, then write so the condition is jointly invalidated; ControlPlane avoids it with direct conflicts and a partial unique index. | §4 |
+| Q17 | Why UUIDv7 for rows but UUIDv5 for messages? | UUIDv7 is time-ordered for index locality; UUIDv5 is deterministic so retries produce the same dedup key. | §4 |
+| Q18 | What should `/healthz` check? | Readiness can check Postgres and RabbitMQ; liveness should be shallow so a dependency outage does not restart every pod. | §1 |
+| Q19 | How do you bound a request body? | Wrap it with `http.MaxBytesReader` before decoding, set `MaxHeaderBytes`, and add a proxy limit. | §1 |
+| Q20 | What status for a database connection reset? | 500 `internal_error`, or 503 with `Retry-After` under a clear dependency policy; log the cause without leaking the driver error. | §1 |
+
 ---
 
 ## 7. ControlPlane tie-in
+
+**Description.** This table maps each Day 3 decision to the file that enforces it: server timeouts and shutdown, request IDs, the error-code map, 201/202 semantics, conditional updates, unique-violation mapping, the `DB` interface, keyset pagination, and the outbox/inbox statements. The recurring point is that the handler never does read-then-write for a race; the database is the arbiter and the service owns transaction boundaries.
 
 | Decision | File | Why |
 |---|---|---|

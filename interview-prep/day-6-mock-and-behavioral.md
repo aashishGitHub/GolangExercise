@@ -67,6 +67,8 @@ Answer two:
 
 ## 2. Scorecard
 
+**Description.** The scorecard turns a mock interview into a prioritized fix list. It scores correctness, depth, tradeoffs, structure, concurrency, database, messaging, demo, communication, and behavioral answers from 1 to 5, with 4+ required in the core technical dimensions. For every 1 or 2, write one fix and retest it; do not try to fix ten things at once.
+
 Score 1–5. Target: **4+ in correctness, depth, and tradeoffs; 3+ everywhere else.**
 
 | Dimension | 1 | 3 | 5 | Score |
@@ -88,6 +90,8 @@ try to fix ten things.
 ---
 
 ## 3. Behavioral — six stories, not twenty
+
+**Description.** Prepare six reusable stories instead of memorizing answers to every possible prompt. Each story uses STAR (Situation, Task, Action, Result) and ends with a one-line reflection about what you would do differently. The same story can answer several prompts by changing the emphasis, so the set should cover ownership, debugging, disagreement, failure, influence, and delivery under constraint.
 
 You need six reusable stories. Each should be 90–120 seconds. Use **STAR**, then add a one-line
 reflection: what you would do differently.
@@ -190,6 +194,8 @@ non-goals, and named the hardening gaps instead of pretending they did not exist
 
 ## 4. Tell me about yourself — 90 seconds
 
+**Description.** The intro is a 90-second argument in four beats: what you do now, the proof that you can do this role, why this role, and a handoff inviting the interviewer to go deeper. It is not a chronological resume and not a list of technologies. The proof beat should name one system and the invariants it enforces.
+
 Use four beats:
 
 1. **Now:** "I'm a senior engineer with 13 years across product engineering, currently building
@@ -207,6 +213,8 @@ technology.
 
 ### Why Go?
 
+**Description.** The answer should connect Go's properties to the workload: I/O-bound services with explicit concurrency, cancellation, and a small deployment footprint. It should also avoid overclaiming: the database enforces the cross-process invariants, and Go's job is bounded concurrency and clean shutdown, not replacing database constraints.
+
 > "The service is I/O-bound and concurrency-heavy: HTTP, Postgres, RabbitMQ, reconnect loops, workers.
 > Go's explicit concurrency and small deployment footprint fit that. But the correctness mechanism is
 > Postgres, not goroutines — I use Go to issue the right statements with bounded concurrency and to stop
@@ -220,6 +228,8 @@ do not know enough, say what you want to learn and ask a question. Do not generi
 ---
 
 ## 5. Questions to ask
+
+**Description.** The questions you ask are part of the interview: they signal whether you think about correctness, operations, and engineering process. Pick three or four that reveal the system's hardest invariant, its delivery guarantees, its on-call reality, and how decisions are made. Avoid perks and questions answered on the website.
 
 Pick 3–4. The questions should signal senior judgment, not perks.
 
@@ -248,6 +258,8 @@ Avoid: salary/remote in the first round, "what does the company do?", questions 
 ---
 
 ## 6. Interview-day routines
+
+**Description.** The day-of routine is deliberately narrow: review, rehearse one architecture drawing, test the equipment, and stop. Cramming new topics the morning of the interview adds noise without adding recall. During the interview, clarify the question, state assumptions, think aloud in the requirements → mechanism → failure → tradeoff order, and ask for a hint before going silent.
 
 ### Thu 19 Nov — technical round
 

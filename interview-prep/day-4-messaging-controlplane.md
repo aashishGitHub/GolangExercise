@@ -40,6 +40,8 @@ The demo is not "look, a queue." The demo is "look, the system stays correct whe
 
 ### Architecture
 
+**Description.** The control plane is one deployable process with HTTP, the outbox relay, and the consumer, plus a separate stateless worker. The API commits tenant and task state to Postgres; the relay publishes committed outbox rows to RabbitMQ; the worker simulates long-running provisioning and publishes progress; the consumer applies updates through a transaction. The worker has no database connection and is treated as untrusted.
+
 ```mermaid
 flowchart LR
     Client -->|HTTP| API[controlplane: httpapi]
@@ -77,6 +79,8 @@ consumer is the final authority on task existence and tenant mapping.
 
 ### The request transaction
 
+**Description.** `POST /v1/tenants` inserts the tenant and its deploy task in one Postgres transaction. The task row is the outbox row: `published_at IS NULL` means the relay has not handed it to the broker yet. After commit, the service notifies the relay, but the periodic poll is the correctness fallback.
+
 `POST /v1/tenants` does three things in **one** transaction:
 
 1. `INSERT tenants (... status='provisioning', version=1)`.
@@ -90,6 +94,8 @@ safety net. The notification is an optimization, not the correctness mechanism.
 
 ### Why not publish inside the request?
 
+**Description.** Publishing before the database commit lets a worker act on state that may roll back; committing before publishing loses the event if the process crashes in between. There is no atomic transaction across Postgres and RabbitMQ without XA/2PC, which RabbitMQ does not support. The outbox removes the gap by making the event a row in the same transaction as the state change.
+
 Two bad orderings:
 
 - **Publish, then commit:** broker gets the event, DB commit fails → worker acts on a tenant that does
@@ -101,6 +107,8 @@ RabbitMQ is not XA-capable. The outbox makes "publish only after commit" structu
 row in the same transaction as the state change, and the relay publishes committed rows.
 
 ### The relay
+
+**Description.** The relay claims unpublished task rows with `FOR UPDATE SKIP LOCKED`, publishes each one, waits for a publisher confirm, marks `published_at`, and commits. The claim, publish, and mark share one transaction because Postgres row locks are transaction-scoped; `SKIP LOCKED` lets relay replicas claim disjoint batches. A crash after confirm but before commit republishes on restart, which is at-least-once.
 
 ```sql
 SELECT id, tenant_id, type, status, created_at, updated_at, tenant_slug, tenant_name
@@ -129,6 +137,8 @@ Why one transaction around claim + publish + mark:
 
 ### Publisher confirms, `mandatory`, and returns
 
+**Description.** A successful publish call only means the bytes reached the socket. Confirm mode waits for the broker's `basic.ack` or `basic.nack`; `mandatory=true` turns an unroutable message into a `basic.return` instead of a silent drop. A confirm does not prove routing by itself, and a return can arrive just before the confirm, so the publisher must drain returns carefully.
+
 - `PublishWithContext` returning nil only means the bytes reached the socket. It does not mean the
   broker persisted or routed the message.
 - `Confirm(false)` puts the channel in confirm mode. The publisher waits for `basic.ack`; a `basic.nack`
@@ -140,6 +150,8 @@ Why one transaction around claim + publish + mark:
 
 ### Ordering and multiple relays
 
+**Description.** A batch is claimed in `id` order, but multiple relay replicas, retries, and redelivery mean global ordering is not guaranteed. The consumer must be order-tolerant; the rank guard and inbox make out-of-order and duplicate messages safe. A single relay with one channel preserves publish order but is bounded by confirm latency.
+
 - Rows are claimed in `id` order within a batch, but multiple relays and retries mean global ordering is
   not guaranteed. The consumer must be order-tolerant.
 - A single relay with one channel publishes sequentially; throughput is bounded by confirm latency.
@@ -149,12 +161,16 @@ Why one transaction around claim + publish + mark:
 
 ### Broker down for an hour
 
+**Description.** The API keeps accepting work because the outbox rows are durable in Postgres; the relay logs failures and retries, and the backlog drains when the broker returns. The cost is latency: tenants stay in `provisioning` until a worker processes them. Monitor the age of the oldest unpublished row, not just the row count.
+
 The API keeps accepting tenants: the outbox rows are durable in Postgres. The relay logs errors and
 retries. When the broker returns, the backlog drains. The cost is latency: tenants sit in
 `provisioning` until the relay publishes and a worker processes them. The outbox grows; monitor its
 oldest unpublished age, not just its count.
 
 ### Does the outbox grow forever?
+
+**Description.** In this demo, yes: published task rows are retained as history. In production, archive or partition published rows after a retention window, but never delete unpublished rows. The real lag signal is `min(created_at) WHERE published_at IS NULL`, not the total row count.
 
 In this demo, yes; rows are retained as task history. In production, archive/partition published rows
 after a retention window, or move task history to a separate table. Do not delete unpublished rows.
@@ -165,6 +181,8 @@ Monitor `min(created_at) WHERE published_at IS NULL` as the real lag signal.
 ## 3. Inbound: idempotent consumer + inbox
 
 ### The update message
+
+**Description.** The worker publishes a progress event with a deterministic `message_id` derived from task ID and status using UUIDv5. The same logical update produces the same ID across retries, restarts, and broker redelivery, which lets the consumer deduplicate. `occurred_at` may differ between duplicates; the ID is the identity that matters.
 
 ```json
 {
@@ -187,6 +205,8 @@ Monitor `min(created_at) WHERE published_at IS NULL` as the real lag signal.
 
 ### The consumer transaction
 
+**Description.** `ApplyTaskUpdate` runs one transaction: insert the inbox row, load the task, lock tenant then task, reject stale transitions with the rank guard, update the task and tenant outcome, commit, then ack. The inbox insert and state change share a transaction so a crash cannot mark a message processed while losing its effect. Inserting first also serializes concurrent duplicates on the `message_id` primary key.
+
 `ApplyTaskUpdate` runs one DB transaction:
 
 1. `INSERT INTO processed_messages (message_id, task_id) VALUES (...) ON CONFLICT DO NOTHING`.
@@ -205,6 +225,8 @@ concurrent duplicates on the `message_id` primary key; the second delivery block
 commits, then sees zero rows.
 
 ### Rank guard
+
+**Description.** Every task status has a monotonic rank: `accepted` 0, `in_progress` 1, `done` and `failed` 2. Apply an update only when `rank(new) > rank(current)`, so duplicates and late lower-rank messages are stale no-ops. One comparison covers self-loops, duplicates, and reordering without a full from-to transition table.
 
 | Status | Rank |
 |---|---:|
@@ -229,6 +251,8 @@ order (e.g. a new `in_progress` message after `done`). You need both.
 
 ### Terminal tenant mapping
 
+**Description.** A terminal task outcome updates the tenant only if the tenant is still in the expected in-flight status for that task type: `provisioning` for deploy, `updating` for update, `destroying` for destroy. The guarded `WHERE status = $expected` drops an outcome that a newer lifecycle action has superseded. Every terminal outcome increments the tenant version so stale optimistic tokens fail.
+
 | Task type | Expected in-flight tenant status | On done | On failed |
 |---|---|---|---|
 | `deploy` | `provisioning` | `active` | `failed` |
@@ -241,11 +265,15 @@ on every terminal outcome, so clients holding an old optimistic token get `tenan
 
 ### Lock order
 
+**Description.** Every path locks the tenant before the task. Reversing the order in one path creates an ABBA deadlock with a path that locks in the other order. Consistent ordering lets concurrent messages for the same task converge on the same locks, and the inbox plus rank guard make the outcome deterministic.
+
 Tenant first, then task — everywhere. The API path touches tenant before task; the consumer does the
 same. Reversing the order in one path creates an ABBA deadlock. Two different messages for the same task
 converge on the same row locks; the inbox and rank guard make the result deterministic.
 
 ### Poison vs transient
+
+**Description.** A poison message can never succeed: malformed JSON, an unknown schema, an unknown task, or a recovered panic. A transient failure may succeed on retry: a connection reset, timeout, or pool exhaustion. Dead-letter poison immediately; retry transient failures a bounded number of times, then let the broker's delivery limit move the message to the DLQ.
 
 | Failure | Classification | Action |
 |---|---|---|
@@ -264,6 +292,8 @@ retries are bounded (3 attempts with backoff); the broker's delivery limit caps 
 ## 4. RabbitMQ topology and resilience
 
 ### Topology
+
+**Description.** Two direct exchanges carry a closed routing vocabulary: `cp.tasks` routes deploy/update/destroy work to `worker.tasks`, and `cp.task-updates` routes progress to the consumer queue. Quorum queues are durable and replicated, with a delivery limit and a dead-letter exchange. Direct exchanges are exact-match and sufficient because wildcard subscriptions are not part of the design.
 
 | Name | Type | Purpose |
 |---|---|---|
@@ -284,6 +314,8 @@ positional.
 
 ### Ack, nack, prefetch
 
+**Description.** Use manual acks and ack only after the handler's database transaction commits; a lost ack causes redelivery, and the inbox turns that into a no-op. `Nack(requeue=false)` dead-letters poison, while `Nack(requeue=true)` returns transient failures to the queue. Prefetch bounds unacked deliveries: `Qos(10)` for parallel consumers, `Qos(1)` for long sequential tasks.
+
 - Manual ack, not `autoAck=true`. Auto-ack loses the message if the consumer crashes after receiving it.
 - Ack only after the handler's DB transaction commits. If the ack is lost, the broker redelivers and
   the inbox makes it a no-op.
@@ -293,6 +325,8 @@ positional.
   long-running and sequential.
 
 ### Reconnect
+
+**Description.** AMQP connections are expensive and channels die with their connection, so one connection manager owns the connection, watches `NotifyClose`, redials with capped exponential backoff and jitter, re-declares idempotent topology, and hands out fresh channels. Jitter prevents every replica from reconnecting at the same instant. A closed `NotifyClose` channel returns nil forever, so the watcher must react to closure itself.
 
 AMQP connections are expensive; channels die with their connection. `ConnManager` owns one connection:
 it watches `NotifyClose`, redials with capped exponential backoff + jitter (250 ms → 10 s for the
@@ -305,6 +339,8 @@ Why jitter: without it, every replica reconnects at the same instant and creates
 ---
 
 ## 5. Failure matrix — rehearse this
+
+**Description.** The failure matrix lists every crash point between the database, the relay, the broker, the worker, and the consumer, and names the recovery for each. The guarantee is at-least-once delivery plus idempotent apply plus order tolerance, which produces an effectively-once business effect. Exactly-once across a database and a broker is not possible without distributed transactions.
 
 | Crash/failure point | Outcome |
 |---|---|
@@ -347,6 +383,8 @@ is at-least-once + idempotent apply + order tolerance = **effectively-once** bus
 ---
 
 ## 7. Scale, alternatives, and honest gaps
+
+**Description.** This section separates what changes at 10x from what stays invariant. Scale adds batching, sharding, a stuck-task reaper, retention, metrics, and auth, but it does not change the core guarantee: Postgres remains the source of truth and the consumer remains idempotent. Naming the gaps before the interviewer does is part of the senior answer.
 
 ### At 10x
 
@@ -752,6 +790,46 @@ per-tenant rate limits; worker sharding for noisy neighbors. Keep the invariants
 knobs.
 
 </details>
+
+### Rapid answer key
+
+| # | Question | Model answer | Section |
+|---|---|---|---|
+| Q1 | Why is provisioning asynchronous? | It takes minutes and can fail; the API commits durable intent and returns, and a worker does the long work and reports progress. | §1 |
+| Q2 | Why a transactional outbox instead of publishing in the request? | Publish-before-commit can expose a rolled-back tenant; commit-before-publish can lose the event. The outbox commits with the state change. | §2 |
+| Q3 | What exactly is the outbox here? | The `tasks` table: a task row with `published_at IS NULL` is the unpublished event, so one row is both work record and event. | §2 |
+| Q4 | Why is `published_at` separate from `tasks.status`? | `status` is business state; `published_at` is delivery state. Mixing them breaks retries and auditing. | §2 |
+| Q5 | Why `FOR UPDATE SKIP LOCKED`? | It lets relay replicas claim disjoint batches without blocking or double-publishing the same rows. | §2 |
+| Q6 | Why must claim, publish, and mark share one transaction? | Row locks are transaction-scoped; one transaction keeps the claim exclusive and marks published only after a confirm. | §2 |
+| Q7 | Why publisher confirms? | A nil publish only means bytes reached the socket; a confirm means the broker accepted responsibility, so `published_at` is safe to set. | §2 |
+| Q8 | Why `mandatory=true` and returns? | A confirm can acknowledge an unroutable message; `mandatory` turns that into a `basic.return`, which the publisher treats as an error. | §2 |
+| Q9 | At-least-once vs exactly-once? | At-least-once may duplicate but not lose; exactly-once needs distributed transactions or a shared log, so this design uses at-least-once plus idempotent apply. | §3 |
+| Q10 | Why are duplicate deliveries acceptable? | The inbox rejects the same `message_id` and the rank guard rejects stale messages, so duplicates cost work, not correctness. | §3 |
+| Q11 | What if the relay crashes between confirm and commit? | The row stays unpublished and is republished on restart; that is a duplicate, never a lost event or a publish before commit. | §2 |
+| Q12 | What if the broker is down for an hour? | The API keeps accepting and outbox rows accumulate; the relay retries and drains when the broker returns. Monitor oldest unpublished age. | §2 |
+| Q13 | Does the outbox grow forever? | In the demo, published rows are retained; production archives or partitions them after retention and never deletes unpublished rows. | §2 |
+| Q14 | Multiple relays: how do they avoid double-claiming? | `SKIP LOCKED` inside one transaction per batch; each relay locks different rows and holds the lock through publish and mark. | §2 |
+| Q15 | Does the outbox guarantee ordering? | Not globally: multiple relays, retries, and worker concurrency reorder delivery. The rank guard tolerates it; strict per-tenant order needs a sequence and partition key. | §2 |
+| Q16 | Why deterministic `message_id`? | Retries and redeliveries must produce the same inbox key; UUIDv5 from task ID and status is stable, while a random ID defeats deduplication. | §3 |
+| Q17 | Why both the inbox and the rank guard? | The inbox handles the same message twice; the rank guard handles different messages out of order. Removing either leaves a gap. | §3 |
+| Q18 | Why insert the inbox row first? | It serializes concurrent duplicates on the `message_id` primary key before any state work happens. | §3 |
+| Q19 | What does `ON CONFLICT DO NOTHING` return? | `RowsAffected() == 0` means already processed: commit, ack, and return duplicate. `1` means this transaction owns the message. | §3 |
+| Q20 | Explain the rank guard. | Ranks are accepted 0, in_progress 1, done/failed 2; apply only when `rank(new) > rank(current)`, which rejects duplicates and late lower-rank messages. | §3 |
+| Q21 | Why not a from-to transition table? | It needs self-loops for duplicates and stale entries for every reordered pair; one rank comparison encodes the forward-only invariant. | §3 |
+| Q22 | Why lock tenant before task? | A consistent lock order prevents ABBA deadlocks between the API path and the consumer. | §3 |
+| Q23 | Why update the tenant only on terminal task updates? | `in_progress` does not change tenant lifecycle; only `done` or `failed` drives the tenant to its next state. | §3 |
+| Q24 | Why bump the tenant version on a terminal outcome? | The version is the optimistic token; a state change invalidates stale client tokens and lets clients detect completion. | §3 |
+| Q25 | Why is the message's `tenant_id` not trusted? | The task row is the source of truth; the consumer loads `task.tenant_id` so a malformed message cannot cross tenant boundaries. | §3 |
+| Q26 | Poison vs transient: how do you classify? | Malformed or unknown messages are poison and go to the DLQ; connection resets, timeouts, and pool exhaustion are transient and get bounded retries. | §4 |
+| Q27 | Why `x-delivery-limit=5`? | It caps broker-side redelivery of a persistently failing message, which then dead-letters instead of looping forever. | §4 |
+| Q28 | Why quorum queues? | They are replicated, durable, designed for at-least-once work, and support a delivery limit; classic non-durable queues can lose messages. | §4 |
+| Q29 | Why reconnect with backoff plus jitter? | Backoff avoids hammering a down broker; jitter prevents every replica from reconnecting at the same instant. | §4 |
+| Q30 | Why does the consumer process sequentially? | It keeps unacked deliveries bounded and failure classification simple; the database transaction is the correctness boundary. | §4 |
+| Q31 | Why does the worker have no DB connection? | The worker is untrusted and stateless; the consumer is the only authority on task existence, tenant mapping, and transitions. | §4 |
+| Q32 | Why prefetch 1 on the worker? | Tasks are long-running, so one unacked task means a crash causes exactly one redelivery, at the cost of throughput. | §4 |
+| Q33 | Why ack the task only after the terminal update is confirmed? | Acking earlier can lose the outcome on a crash; ack-after-confirm means the broker has the update first, and a lost ack replays harmlessly. | §4 |
+| Q34 | What if a task is stuck in `in_progress` forever? | This build has no reaper; production needs a lease or heartbeat, a reaper, and provider reconciliation. Name it as a gap. | §5, §7 |
+| Q35 | What would you change at 10x? | Batch confirms, shard by tenant, add a reaper, archive published rows, expire inbox rows, add metrics, auth, rate limits, and worker sharding. | §7 |
 
 ---
 

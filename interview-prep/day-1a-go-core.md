@@ -2,7 +2,7 @@
 
 **Audience:** You can build software in another language, but Go's defaults, copying rules, and interface model are new. This is the on-ramp to [`day-1-go-core.md`](day-1-go-core.md), not a replacement for it.
 
-**Read time:** ~50 minutes total, about 2–3 minutes per lesson. Split it into two or three sittings if that is what fits.
+**Read time:** ~60 minutes for the lessons, plus ~10 minutes for the interview Q&A table. Split it into two or three sittings if that is what fits.
 
 **In scope:** The same Day 1 concepts, in the same order: zero values, slices, maps, strings, pointers, embedding, interfaces, method sets, the nil-interface trap, assertions, generics, errors, `defer`, panic, testing, tooling, and the ControlPlane tie-in.
 
@@ -12,7 +12,7 @@
 
 **Lesson IDs:** L1–L19, in source order. The source's grill keeps its Q1–Q12 labels; the map below links each grill question to the lesson that prepares it.
 
-**Flow:** Each lesson is one short explanation: what is happening, one concrete example, why it matters, what to focus on and ignore, three Q&As, and one line to remember. Code blocks are short sketches, not complete programs.
+**Flow:** Each lesson starts with a one-line technical description, then one concrete example, why it matters, what to focus on and ignore, three quick Q&As, and one line to remember. The final interview table collects the 12 grill questions with model answers. Code blocks are short sketches, not complete programs.
 
 > **Schedule note (Sat 14 Nov 2026):** If Day 1 was harder than expected, do not double up. Use this file as today's core, then run the Day 1 drills. Shift Day 2 to Sun 15 Nov, then run Day 3 Mon 16 and Day 4 Tue 17. Use Wed 18 for a compressed Day 5 rehearsal plus the Day 6 mock. The 19/20 Nov interview dates do not move.
 
@@ -24,7 +24,7 @@ Read one lesson at a time. After each lesson, close the file and say the **Remem
 
 Do not read this file and Day 1 cover to cover in the same sitting. This file gives you the shape; Day 1 gives you the interview-grade detail. Use the Day 1 drills after L2, L13–L14, and L17.
 
-**Suggested 60-minute pass:** 5 minutes on the map and the five things below, 45 minutes on the lessons, 5 minutes on the recall sheet, then 5 minutes to pick one drill. The second hour is for the drill and the Day 1 grill.
+**Suggested 70-minute pass:** 5 minutes on the map and the five things below, 50 minutes on the lessons, 10 minutes on the interview Q&A table, and 5 minutes on the recall sheet. The second hour is for a drill and the Day 1 grill.
 
 **Minimum pass (20 minutes):** L1, L2, L6, L9, L10, L13, and L14. These are the five things plus the two ideas they depend on.
 
@@ -56,11 +56,15 @@ Do not read this file and Day 1 cover to cover in the same sitting. This file gi
 | L18 | Modules, commands, embed     | §4 Tooling            | —     |
 | L19 | ControlPlane tie-in          | §7 Tie-in             | Q12   |
 
+The 12 grill questions and model answers are collected in [Likely interview Q&A](#likely-interview-qa) at the end.
+
 **The one idea behind Day 1.** Go is a small language with a few sharp edges. Most of Day 1 is one question: what gets copied, and who owns the original? Slices copy headers, pointers copy addresses, interfaces copy a type and a value, errors wrap other errors, and `defer` runs cleanup on the way out. Once you see the copies, the syntax stops being arbitrary.
 
 ---
 
 ## L1. Zero values — Go always gives you a usable default
+
+**Description.** A zero value is the value Go assigns to a variable of type `T` when no initializer is given: `0`, `false`, `""`, or `nil` for pointer-like types. C# fields get `default(T)` and JavaScript has `undefined`; Go applies this default to every declaration, so there is no uninitialized state.
 
 In Go, a variable is never `undefined`. The moment you declare it, the language assigns a **zero value** that depends on its type. Numbers become `0`, booleans become `false`, strings become `""`, and pointers, slices, maps, channels, functions, and interfaces become `nil`. A struct gets the zero value of each field, and an array gets the zero value of each element. There is no separate "uninitialized" state to check.
 
@@ -91,6 +95,8 @@ This is why `var mu sync.Mutex` works without a constructor: the zero value of a
 
 ## L2. Slices are a three-word header, not the data
 
+**Description.** A slice is a value with three words: a pointer to a backing array, a length, and a capacity. Copying a slice copies those three words, not the elements, so two slices can share the same array. A C# `List<T>` or JavaScript array is an object; a Go slice is a header you pass by value.
+
 A slice feels like a list, but it is actually a small descriptor with three words: a pointer to a backing array, a length, and a capacity. The length is how many elements you can see; the capacity is how many elements fit before `append` has to allocate a new array. Copying a slice copies the descriptor, not the elements, so two slices can point at the same array.
 
 ```go
@@ -114,13 +120,15 @@ Analogy: a slice is a window onto a row of lockers. The window can show two lock
 
 **Q: When does `append` allocate?** When the slice has no spare capacity, meaning `len == cap`.
 
-**Q$: Why does `s = append(s, x)` matter?** `append` may return a header pointing at a new array; ignoring it leaves `s` pointing at the old one.
+**Q: Why does `s = append(s, x)` matter?** `append` may return a header pointing at a new array; ignoring it leaves `s` pointing at the old one.
 
 **Remember:** a slice is a view, and `append` can write through the view.
 
 ---
 
 ## L3. Nil slice, empty slice, and copying
+
+**Description.** A nil slice has no backing array; an empty slice is non-nil and has length zero. Both work with `len`, `range`, and `append`, but only the nil slice encodes to JSON `null`; the empty slice encodes to `[]`. `copy(dst, src)` copies into an existing destination and never grows it.
 
 A nil slice (`var s []int`) has no backing array. An empty slice (`s := []int{}`) is non-nil and has length zero. Both have `len(s) == 0`, both work with `range`, and both accept `append`; the difference appears when you serialize them or compare them to `nil`. A nil slice marshals to JSON `null`, while an empty slice marshals to `[]`.
 
@@ -153,6 +161,8 @@ c, _ := json.Marshal(emptySlice) // []
 
 ## L4. Maps — readable when nil, writable only when initialized
 
+**Description.** A map is a reference to a hash table. Its zero value is nil: reads, `len`, `range`, and `delete` work, but a write panics until you initialize it with `make` or a literal. A C# `Dictionary<TKey,TValue>` or JavaScript `Map` must also be created before use, but Go's nil map is readable.
+
 A map is a hash table from keys to values. The zero value of a map is `nil`: reading from it is fine and returns the value type's zero value, ranging over it is fine and does nothing, but writing to it panics. You initialize a map with `make` or a literal before you write. The comma-ok form, `v, ok := m[key]`, is how you tell "missing" from "present with a zero value."
 
 ```go
@@ -181,6 +191,8 @@ Iteration order is deliberately randomized, so code that depends on map order is
 ---
 
 ## L5. Strings are bytes; runes are characters
+
+**Description.** A string is an immutable sequence of bytes, normally UTF-8. A rune is one Unicode code point stored as an `int32`; `len(s)` counts bytes, while `for range` decodes UTF-8 and yields runes. C# and JavaScript strings are UTF-16 code units, so the byte/rune split is a new layer.
 
 A Go string is an immutable sequence of bytes, usually UTF-8. That means `len(s)` counts bytes, not characters. A **rune** is one Unicode code point, stored as an `int32`. A `for range` loop over a string decodes UTF-8 and gives you the byte index of each rune and the rune itself; `s[i]` gives you a single byte.
 
@@ -212,6 +224,8 @@ Converting between `string` and `[]byte` copies the data. Building a string with
 ---
 
 ## L6. Pointers and value semantics
+
+**Description.** Go passes every argument by value. A pointer is a value that stores an address; passing `*T` copies the address, not the pointed-to value. C# classes are reference types by default; in Go the `*` is explicit. Use a pointer to mutate, represent absence, or avoid copying a large struct.
 
 Go passes everything by value. When you pass a struct, the function gets a copy; when you pass a pointer, the function gets a copy of the address, and both copies point at the same object. Use a pointer when you need to mutate the caller's value, when `nil` means "absent," or when copying a large struct is wasteful. Use a value when the type is small, immutable-ish, or should not be shared.
 
@@ -245,6 +259,8 @@ You do not need to return a pointer to a local variable just to keep it alive; G
 ---
 
 ## L7. Embedding is composition, not inheritance
+
+**Description.** Embedding places a type inside another without a field name and promotes its exported fields and methods to the outer type. It is composition with syntactic forwarding, not inheritance: the outer type is not a subtype of the inner type.
 
 Embedding puts one type inside another without giving it a field name. The outer type gets the embedded type's exported fields and methods **promoted**, so `u.Describe()` works even though `Describe` was defined on `Base`. This looks like inheritance, but it is not: `User` is not a `Base`, you cannot pass a `User` where a `Base` is expected, and there is no virtual dispatch.
 
@@ -281,6 +297,8 @@ Use a named field when the relationship should be explicit, such as `Base Base` 
 
 ## L8. Interfaces are implicit, small, and consumer-owned
 
+**Description.** An interface is a set of method signatures. A type satisfies it implicitly by implementing every method; there is no `implements` declaration, and the check happens at compile time. C# requires an explicit `: IInterface`; Go's rule is structural, but it is checked against method sets rather than shapes.
+
 An interface is a set of method signatures. A type satisfies it by having all those methods; there is no `implements` keyword and no declaration at the type.
 
 Small interfaces compose: `io.Reader` plus `io.Writer` is `io.ReadWriter`. The consumer should define the interface it needs, because the consumer knows what it is going to call. Return concrete types from constructors; accept interfaces at the boundaries where you need to swap implementations.
@@ -313,9 +331,11 @@ Do not create an interface only to mock it. Create one when there is a real seam
 
 ---
 
-## L9$. Method sets and the pointer-receiver rule
+## L9. Method sets and the pointer-receiver rule
 
-$ A method with receiver `T` belongs to both `T` and `*T`. A method with receiver `*T` belongs only to `*T`.
+**Description.** A method set is the set of methods callable on a type. The method set of `T` contains value-receiver methods; the method set of `*T` contains both value- and pointer-receiver methods. Interface satisfaction uses the method set, so a pointer-receiver method is not available on a `T` stored in an interface.
+
+A method with receiver `T` belongs to both `T` and `*T`. A method with receiver `*T` belongs only to `*T`.
 
 That one sentence explains a common compile error: if `Inc` has a pointer receiver, then `Counter` does not satisfy an interface that requires `Inc`, but `&Counter{}` does. If a method mutates the receiver, use a pointer receiver. If one method needs a pointer, be consistent for that type.
 
@@ -348,38 +368,70 @@ You can still call `c.Inc()` on an addressable `Counter` variable; Go automatica
 
 ## L10. The nil-interface trap
 
-An interface value has two parts: the dynamic type of the value stored inside it, and the value itself. The interface is nil only when both parts are nil.
+**Description.** An interface value is a two-word pair: a type word identifying the dynamic type (and, for non-empty interfaces, its method table), and a data word holding the value. It is nil only when both words are nil. Assigning a typed nil pointer sets the type word, so the interface is non-nil even though the data word is nil.
 
-If you assign a typed nil pointer to an interface, the interface stores the type and a nil value, so the interface is not nil. This is why returning a typed nil pointer as an `error` is a bug.
+The type word answers "what concrete type is in here?" and selects the method to call. The data word answers "where is the value?" For a pointer type, the data word is the pointer itself. A nil interface has no type and no value; an interface holding a typed nil has a type but no value.
 
 ```go
-type MyError struct{}
-func (e *MyError) Error() string { return "my error" }
+type MyError struct{ Code string }
+func (e *MyError) Error() string { return e.Code }
 
-var p *MyError    // nil pointer
-var err error = p // interface holds type *MyError, value nil
+var p *MyError    // nil *MyError
+var err error = p // type word = *MyError, data word = nil
 fmt.Println(err == nil) // false
 ```
 
-Analogy: a labeled box. The box has "MyError" printed on the outside even though it is empty inside; the interface checks the label, not just the contents.
+The comparison is false because `err` has a dynamic type. If `Error()` dereferences `e.Code`, calling it on this value panics; if the method returns a constant, `fmt.Println(err)` may print a normal-looking message. Either way, the caller sees a non-nil error.
 
-**Why it matters.** A function can return "no error" as a non-nil error, so the caller's `if err != nil` branch runs and the program reports a failure that did not happen. The fix is to return an untyped `nil` explicitly when there is no error, not a typed nil variable.
+| Declaration                         | Type word  | Data word       | `err == nil` |
+| ----------------------------------- | ---------- | --------------- | ------------ |
+| `var err error`                     | nil        | nil             | true         |
+| `var p *MyError; var err error = p` | `*MyError` | nil             | false        |
+| `err = &MyError{Code: "x"}`         | `*MyError` | non-nil pointer | false        |
 
-**Focus on:** interface = type + value; a typed nil is not a nil interface; return explicit `nil`.
+Coming from C# or JavaScript, the difference is easy to miss: a null reference assigned to a C# interface or an `object` variable is simply null, and JavaScript's `null` and `undefined` are values. Go's interface keeps the dynamic type separately, so "nil pointer" and "nil interface" are different states.
 
-**Ignore for now:** the in-memory interface representation, `reflect.Value.IsNil`, and typed nils in generics.
+The fix belongs on the producer side: return an untyped `nil` when there is no error, not a typed nil variable.
 
-**Q: Why is `err == nil` false?** The interface has a non-nil dynamic type even though the pointer is nil.
+```go
+func find(p *MyError) error {
+    if p == nil {
+        return nil // nil interface
+    }
+    return p // type *MyError, non-nil data word
+}
+```
 
-**Q: How do you fix it?** Return `nil` directly, not a typed nil pointer.
+If a function must return `*MyError` for other callers, check the pointer for nil before converting it to `error`, or keep the concrete-returning function separate from the `error`-returning API. Do not "fix" the caller by comparing the interface to a typed nil pointer; that just hides the producer bug.
 
-**Q: Does this affect non-error interfaces?** Yes, any interface holding a typed nil.
+**Why it matters.** A function can return "no error" as a non-nil error, so the caller's `if err != nil` branch runs and the program reports a failure that did not happen. The same rule applies to any interface, not just `error`: a typed nil pointer in an interface is still a non-nil interface.
+
+**Focus on:** interface = type word + data word; a typed nil is not a nil interface; return an explicit untyped `nil`.
+
+**Ignore for now:** the exact `itab` layout, `reflect.Value.IsNil`, and typed nils in generics.
+
+**Say this in the interview:**
+
+> "An interface value stores a dynamic type and a value. A typed nil pointer gives the interface a non-nil type, so the interface is not nil. Return an untyped `nil` when there is no error."
+
+**Interview Q&A.**
+
+**Q: Why is `err == nil` false when the pointer inside is nil?**
+**A:** Interface equality compares the dynamic type and the value. The type word is `*MyError`, so the interface is non-nil even though the data word is nil.
+
+**Q: How do you fix it?**
+**A:** Return an untyped `nil` from the `error`-returning function, or check the typed pointer for nil before assigning it to the interface. Do not compare the interface against a typed nil pointer.
+
+**Q: Does this affect non-error interfaces?**
+**A:** Yes. Any interface can hold a typed nil pointer; the same type/value rule applies. It is most visible with `error` because `if err != nil` is everywhere.
 
 **Remember:** a nil pointer inside an interface is still a non-nil interface.
 
 ---
 
 ## L11. Type assertions and type switches
+
+**Description.** A type assertion reads the dynamic type from an interface: `v.(T)` panics on a mismatch, while `v, ok := v.(T)` returns `ok == false`. A type switch dispatches on the dynamic type and binds a typed variable in each case. C# `is`/`as` and TypeScript type guards are the closest familiar ideas.
 
 A type assertion extracts the concrete type from an interface. The safe form, `s, ok := v.(string)`, returns `ok == false` when the type is wrong. The unsafe form, `s := v.(string)`, panics. A type switch checks several concrete types in order and is the readable choice when one value can arrive in several shapes.
 
@@ -416,6 +468,8 @@ For errors, prefer `errors.As` over a type assertion. A type assertion only look
 
 ## L12. Generics — same algorithm, different types
 
+**Description.** Generics parameterize a function or type by one or more type parameters, with constraints that limit which types are allowed. The compiler type-checks each use; there is no runtime reflection. C# generics are the closest model, but Go has no generic methods.
+
 Generics let one function or type work over several types while keeping compile-time checks. The classic example is `Map`: the loop is identical for every element type, so the type parameter removes real duplication. Good uses are collections, type-safe pools, and result/option types. Bad uses are replacing a clear interface or inventing type-level abstractions the codebase does not need.
 
 ```go
@@ -447,6 +501,8 @@ Go favors concrete code. A generic function adds a type parameter that every rea
 ---
 
 ## L13. Errors are values
+
+**Description.** An error is an interface value with an `Error() string` method; Go returns errors as ordinary values, usually as the last result. A sentinel error is a shared value compared by identity, a typed error carries fields, and wrapping with `%w` preserves the original error in a chain. C# and JavaScript throw exceptions; Go makes failure explicit in the signature.
 
 In Go, an error is an ordinary value that implements `Error() string`. By convention, a function returns it as its last result.
 
@@ -483,6 +539,8 @@ Add context at each boundary: `fmt.Errorf("service: create tenant: %w", err)`. D
 
 ## L14. `errors.Is` versus `errors.As`
 
+**Description.** `errors.Is` walks the wrap chain and compares each error to a target value; `errors.As` walks the chain and assigns the first error of a target type. `Is` answers identity, `As` answers type and data. Both are needed because wrapping hides the original value behind new error values.
+
 `errors.Is(err, target)` walks the wrap chain and compares each error with the target. Use it when identity matters, such as `ErrNotFound`.
 
 `errors.As(err, &target)` walks the same chain looking for a specific type and assigns the first match to `target`. Use it when you need the fields inside a typed error. `errors.As` needs a pointer to the target variable, and the target must implement `error` or be an interface.
@@ -514,6 +572,8 @@ The difference is the question you are asking. `Is` asks "is this the same error
 
 ## L15. `defer` — cleanup on the way out
 
+**Description.** `defer` registers a function call to run when the surrounding function returns, whether by normal return or panic. Deferred calls run LIFO, and their arguments are evaluated when `defer` executes, not when the call runs. C# `finally` and JavaScript `finally` have a similar cleanup role, but `defer` is per-call and LIFO.
+
 `defer` schedules a function call to run when the surrounding function returns, including when it panics. Defers run in last-in, first-out order: the last one deferred runs first. The arguments to a deferred call are evaluated immediately, but the call itself happens later. Use it for cleanup that must run on every path: closing a response body, rolling back a transaction, or canceling a context.
 
 ```go
@@ -543,6 +603,8 @@ Named return values are variables in the function's scope. A deferred closure ru
 ---
 
 ## L16. Panic and recover — for bugs, not expected failures
+
+**Description.** `panic` stops normal execution and unwinds the stack, running deferred calls. `recover` stops that unwind only when called directly inside a deferred function. Panic is for programmer errors and impossible states; expected failures should be returned as errors.
 
 `panic` stops normal execution and unwinds the stack, running deferred functions along the way. `recover`, called inside a deferred function, can stop the panic and turn it into an error. Use panic for programmer bugs or truly unrecoverable state, not for expected failures such as "not found," validation, or a bad request. Recover only at a boundary, such as HTTP middleware or a worker delivery handler, so one bad request or message does not kill the process.
 
@@ -577,6 +639,8 @@ A panic in any goroutine that is not recovered kills the whole process. That is 
 ---
 
 ## L17. Table-driven tests — the default shape
+
+**Description.** A table-driven test stores inputs and expected outputs in a slice of structs, then loops over it and creates a named subtest with `t.Run`. The table is data, so adding a case is one entry and failures identify the case by name. C# `[Theory]`/`[InlineData]` and Jest `test.each` solve the same problem.
 
 A table-driven test puts the cases in a slice of structs, then loops over them with `t.Run` to create named subtests. Adding a case becomes one line, and a failure names the case instead of a line number inside a loop. `t.Parallel` is safe only when the cases do not share mutable state. `t.Cleanup` registers teardown that runs even if the test fails.
 
@@ -620,6 +684,8 @@ Use `httptest` to test HTTP without a real port. Use real Postgres or RabbitMQ i
 
 ## L18. Modules, commands, and `//go:embed`
 
+**Description.** A module is a versioned collection of packages described by `go.mod`; `go mod tidy` synchronizes dependencies. `internal/` restricts imports to the module, and `//go:embed` includes file contents in the binary at build time. C# has NuGet and JavaScript has `package.json`; Go keeps the module file in the repository and the toolchain in the `go` command.
+
 `go.mod` pins the module path, the Go version, and the dependencies. `go mod tidy` adds missing requirements and removes unused ones. The commands a reviewer runs are short: `gofmt -l .` should print nothing, `go vet ./...` should print nothing, `go test ./... -count=1` disables the test cache, and `go test -race ./...` looks for data races (it needs a C toolchain on Windows). To run one test, use `go test ./internal/domain -run TestName -v`; to see coverage, add `-cover`. `internal/` prevents packages outside the module from importing a package.
 
 ```go
@@ -648,6 +714,8 @@ var schemaSQL string
 ---
 
 ## L19. Where Day 1 shows up in ControlPlane
+
+**Description.** This lesson introduces no new language feature; it maps the Day 1 concepts to ControlPlane's design boundaries: typed errors, the `store.DB` interface, functional options, `//go:embed`, and a pure domain package.
 
 The Day 1 concepts are not abstract; they explain why ControlPlane is shaped the way it is. `*domain.Error` is a typed error carrying a stable code, and `errors.As` at the HTTP boundary maps that code to a status.
 
@@ -698,26 +766,28 @@ Every source section is accounted for; nothing is silently dropped.
 | §4 Testing                      | L17                 | Covered                 |
 | §4 Modules and tooling          | L18                 | Covered                 |
 | §5 Active practice              | Day 1 drills        | Practice, not re-taught |
-| §6 Grill Q1–Q12                 | Table below         | Covered                 |
+| §6 Grill Q1–Q12                 | Interview Q&A below | Covered                 |
 | §7 ControlPlane tie-in          | L19                 | Covered                 |
 | §8 End-of-day checkpoint        | Recall sheet below  | Covered                 |
 
-**Source grill coverage**
+## Likely interview Q&A
 
-| Grill | Question                                   | Lesson   |
-| ----- | ------------------------------------------ | -------- |
-| Q1    | Zero value and API design                  | L1       |
-| Q2    | Nil slice vs empty slice                   | L3       |
-| Q3    | Why `append` can mutate the caller's slice | L2       |
-| Q4    | When a map write panics                    | L4       |
-| Q5    | Value vs pointer receiver                  | L6, L9   |
-| Q6    | Typed nil pointer vs nil error             | L10      |
-| Q7    | `errors.Is` vs `errors.As`                 | L11, L14 |
-| Q8    | `%w` vs `%v`                               | L13      |
-| Q9    | When panic is acceptable                   | L16      |
-| Q10   | Deferred function and named returns        | L15      |
-| Q11   | When not to use generics                   | L12      |
-| Q12   | Why `store.DB` instead of `*pgxpool.Pool`  | L8, L19  |
+Answer aloud before reading the model answer. The lesson column points back to the explanation.
+
+| #   | Likely interview question                                                             | Model answer                                                                                                                                                                                                                                                                                          | Lesson   |
+| --- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Q1  | What is a zero value, and why does it matter in API design?                           | Every type has a defined zero value, so a variable is never undefined. It matters because a struct with a useful zero value needs no constructor, and because `0`, `""`, and `nil` are ambiguous in JSON: you cannot tell "absent" from "explicitly zero" without a pointer or a presence flag.       | L1       |
+| Q2  | Nil slice vs empty slice — what is the difference?                                    | Both have `len == 0` and work with `append`/`range`. A nil slice has no backing array and marshals to JSON `null`; an empty slice marshals to `[]`. Use `[]T{}` when the API contract promises an array.                                                                                              | L3       |
+| Q3  | Why can `append` mutate the caller's slice?                                           | A slice is a header pointing at a backing array. If the slice has spare capacity, `append` writes into that array, which may be shared with another slice. If capacity is exceeded, it allocates a new array. Always use the returned slice and copy when you need isolation.                         | L2       |
+| Q4  | When does a map write panic?                                                          | Writing to a nil map panics. Concurrent writes, or a write concurrent with a read, are a data race and can panic with "concurrent map writes". Reads from a nil map are safe and return the zero value.                                                                                               | L4       |
+| Q5  | Value receiver vs pointer receiver — how do you choose?                               | Use a pointer receiver when the method mutates the receiver, when the struct is large, or when nil is a meaningful state. Use a value receiver for small immutable values. Be consistent: if one method needs a pointer, use pointers for that type's methods.                                        | L6, L9   |
+| Q6  | Why is a typed nil pointer not equal to a nil error?                                  | An interface holds a type and a value. Assigning a nil `*MyError` to `error` stores the type `*MyError`, so the interface is non-nil even though the pointer is nil. Return an untyped `nil` explicitly.                                                                                              | L10      |
+| Q7  | `errors.Is` vs `errors.As`?                                                           | `errors.Is` compares an error against a value or sentinel through the wrap chain. `errors.As` searches the chain for a specific type and assigns it to a target. Use `Is` for identity, `As` when you need fields from a typed error.                                                                 | L11, L14 |
+| Q8  | Why wrap with `%w` instead of `%v`?                                                   | `%w` preserves the original error in the chain, so `errors.Is` and `errors.As` still work. `%v` formats the message and discards the identity. Wrap at boundaries; do not wrap the same error five times with no new information.                                                                     | L13      |
+| Q9  | When is `panic` acceptable?                                                           | For programmer errors and impossible states, such as a nil dependency or a broken invariant, or during init. Not for expected I/O failures, validation, or "not found". Recover at process boundaries so one bad input does not take down the service.                                                | L16      |
+| Q10 | Why can a deferred function change a named return value?                              | Named results are variables in the function's scope. A deferred closure runs after the return values are assigned but before the function actually returns, so it can modify them. This is useful for recovering a panic into an error, but can be surprising.                                        | L15      |
+| Q11 | When should you not use generics?                                                     | When an interface expresses the behavior more clearly, when there is only one concrete type, or when the generic abstraction adds type parameters without removing real duplication. Go favors simple, concrete code; generics are a tool, not a style.                                               | L12      |
+| Q12 | Why does ControlPlane define `store.DB` instead of taking `*pgxpool.Pool` everywhere? | `*pgxpool.Pool` and `pgx.Tx` both satisfy `Exec`, `Query`, and `QueryRow`. A store function that takes `DB` can run standalone for a read or inside a caller-owned transaction, and the store never decides where the transaction boundary is. That keeps transaction ownership in the service layer. | L8, L19  |
 
 ---
 

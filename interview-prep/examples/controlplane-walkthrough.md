@@ -9,6 +9,8 @@ Repo: `C:\PROJECT\aashishGithub\Avid\ControlPlane` (GitHub: `aashishGitHub/Contr
 
 ## 1. The 30-second tour
 
+**Description.** The tour is a package map, not a file list: HTTP, relay, and consumer live in one control-plane process; the worker is a separate stateless process with no database access; domain holds pure rules; store holds SQL and constraints; messaging owns AMQP. The sentence to say is "Postgres is the source of truth and the arbiter; RabbitMQ is the transport."
+
 ```text
 cmd/controlplane ── HTTP API + outbox relay + update consumer (one process)
 cmd/worker       ── simulator: consumes tasks, publishes progress (no DB)
@@ -31,6 +33,8 @@ transport."*
 ---
 
 ## 2. File-by-file map
+
+**Description.** This map answers "which file owns which invariant?" rather than "what does every file do?" For each package, know the boundary it protects and the function an interviewer would ask you to open. The entrypoints show how one process wires HTTP, relay, and consumer, while the worker stays deliberately database-free.
 
 ### Entrypoints
 
@@ -301,6 +305,8 @@ after a long success.
 
 ## 3. "Show me the line" — 18 prompts
 
+**Description.** These prompts simulate a code-review interview: the interviewer names an invariant, and you navigate to the line that enforces it. The answer should identify the mechanism and the failure mode it prevents, not just the file path. Practice until each answer takes under ten seconds to locate and thirty seconds to explain.
+
 For each: open the file, find the function, point at the statement. Do not scroll aimlessly.
 
 ### 1. "Where do you prevent two tenants with the same slug?"
@@ -474,6 +480,8 @@ the same invariant through HTTP."*
 
 ## 4. Five-minute code tour (when they say "show me the code")
 
+**Description.** The five-minute tour follows one event through the system instead of opening every file: schema constraints, tenant/task insert, conditional update, outbox claim/publish/mark, publisher confirms, idempotent consumer, ack policy, and the race test. Each stop is one invariant and one sentence. Resist explaining the router.
+
 Do not open every file. Follow the event:
 
 1. **`internal/store/schema.sql`** — point at `UNIQUE(slug)`, the status checks, the partial open-task
@@ -495,6 +503,8 @@ That is ~5 minutes and covers every invariant. Resist the urge to explain the ro
 ---
 
 ## 5. Ten-minute deep tour
+
+**Description.** The deep tour adds the state machine, outbox locking join, AMQP topology, reconnect semantics, worker failure knobs, and test isolation. Use it only when the interviewer wants depth; each item should still be one mechanism, one failure mode, and one tradeoff. The known-limitations list is part of the tour, not an afterthought.
 
 Add:
 
@@ -534,6 +544,8 @@ VS Code: `Ctrl+P` for file name, `Ctrl+Shift+F` for content, `Ctrl+Shift+O` for 
 
 ## 7. The blank-file test
 
+**Description.** The blank-file test checks whether you know the package boundaries without the editor: for each package, write one sentence and its key functions from memory. If you cannot, reopen only that package. This is a retrieval test, not a reading exercise, and it exposes packages you recognize but cannot explain.
+
 Close the repo. For each package, write one sentence and the key function names. If you cannot, reopen
 only that package.
 
@@ -551,6 +563,8 @@ only that package.
 ---
 
 ## 8. What not to claim
+
+**Description.** These are the claims that turn a strong demo into a credibility problem: production readiness, exactly-once delivery, an authoritative worker, a free outbox, general-purpose `SKIP LOCKED`, Go preventing database races, liveness versus readiness, real migrations, and observability you do not have. Name the gap before the interviewer finds it.
 
 - "Production-ready." It is a take-home with deliberate gaps.
 - "Exactly-once delivery." It is at-least-once + idempotent apply + order tolerance.

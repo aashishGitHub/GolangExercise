@@ -11,6 +11,8 @@ called out where the demo stops short.
 
 ## 1. Layering and dependency direction
 
+**Description.** The dependency graph points inward: `httpapi` depends on `service`, `service` depends on `domain` and `store`, and `domain` depends on nothing infrastructural. `store` functions accept a `DB` so they can run on a pool or inside a caller-owned transaction, while the service owns the transaction boundary. The worker has no database access and is treated as untrusted.
+
 ```text
 cmd/controlplane        wiring, config, signal handling
 cmd/worker              worker simulator wiring
@@ -42,6 +44,8 @@ cannot corrupt state directly.
 ---
 
 ## 2. HTTP server — timeouts and shutdown
+
+**Description.** A production `http.Server` sets distinct timeouts for header reads, full request reads, response writes, and idle keep-alive connections. Each one protects a different resource, and `WriteTimeout` must be disabled or handled per-route for streaming. A socket timeout is not a query timeout, so the request context must still reach pgx.
 
 ```go
 func NewServer(addr string, h http.Handler) *http.Server {
@@ -78,6 +82,8 @@ workers → close the pool/broker. See
 
 ## 3. Middleware order
 
+**Description.** Middleware runs outside-in, so order determines what sees a panic, what runs before body decoding, and what can reject an unauthenticated request cheaply. Request ID and recoverer belong near the outside, body limits before JSON decoding, and auth/rate limits before database work. `RealIP` is safe only behind a trusted proxy.
+
 ```go
 r := chi.NewRouter()
 
@@ -106,6 +112,8 @@ make handlers observe `ctx.Done()`.
 ---
 
 ## 4. JSON decoding — strict, bounded, and honest about errors
+
+**Description.** Decode into a typed struct, cap the body with `http.MaxBytesReader`, reject trailing JSON, and map decode failures to precise codes: malformed JSON is 400, an oversized body is 413, and well-formed but invalid business input is 422. `DisallowUnknownFields` is a compatibility tradeoff, not a universal default.
 
 ```go
 const maxBody = 1 << 20 // 1 MiB
@@ -157,6 +165,8 @@ body or reject trailing JSON. It is a demo; production hardening would add both.
 ---
 
 ## 5. Domain errors and the HTTP envelope
+
+**Description.** A domain error carries a stable code and a human message, independent of HTTP. The HTTP boundary maps that code to a status and emits a stable envelope with `code`, `message`, `details`, and `request_id`; unknown errors become 500 with the cause logged, never leaked. This keeps the domain package free of transport concerns.
 
 ```go
 type ErrorCode string
@@ -247,6 +257,8 @@ code.
 
 ## 6. pgx pool, `DB`, and `WithTx`
 
+**Description.** One shared `pgxpool.Pool` serves the process, and a small `DB` interface lets store functions run on either the pool or a `pgx.Tx`. `WithTx` begins, defers rollback, runs the callback, and commits; the service decides the boundary. The store never commits or opens its own transaction.
+
 ```go
 type DB interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
@@ -314,6 +326,8 @@ connections increase contention and memory. Use PgBouncer if connection count is
 
 ## 7. Unique violation — the create-slug arbiter
 
+**Description.** Insert the row and let the unique index arbitrate concurrent creates; one transaction commits and the other gets SQLSTATE `23505`. Detect the violation with `errors.As` on `*pgconn.PgError` and map it to a domain conflict. Do not pre-check with a `SELECT`, which adds a read-then-write race and a false sense of safety.
+
 ```go
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
@@ -354,6 +368,8 @@ Do not match on the human-readable message.
 ---
 
 ## 8. Conditional UPDATE + disambiguation
+
+**Description.** The PATCH is one atomic `UPDATE` guarded by `id`, `version`, and allowed status, with `version = version + 1` so the next stale write fails. Zero rows has three possible causes, so the service re-reads after the failed update and maps them in order: 404 missing, 409 wrong status, 409 stale version. This avoids a read-then-write race and needs no row lock.
 
 The PATCH mechanism is one statement:
 
@@ -418,6 +434,8 @@ failed tenant can still be torn down.
 
 ## 9. Keyset pagination
 
+**Description.** Keyset pagination uses the last seen `id` as an opaque cursor: `WHERE id > $cursor ORDER BY id LIMIT $n`. With UUIDv7 the ID is time-ordered, so the primary-key index serves the query and there is no `OFFSET` scan or page drift. Add `(status, id)` when filtering by status, and validate the cursor according to the API's strictness policy.
+
 ```sql
 SELECT id, slug, name, status, version, created_at, updated_at
 FROM tenants
@@ -472,6 +490,8 @@ not set it because a tenant has only a handful of tasks. Do not claim it paginat
 ---
 
 ## 10. Transactional outbox — claim, publish, mark
+
+**Description.** The task row is the outbox: `published_at IS NULL` marks work that has not reached the broker. The relay claims rows with `FOR UPDATE SKIP LOCKED`, publishes with confirms and `mandatory`, marks `published_at`, and commits the claim, publish, and mark in one transaction. A crash after confirm before commit republishes on restart, so delivery is at-least-once and the consumer must deduplicate.
 
 The task row is the outbox:
 
@@ -549,6 +569,8 @@ Never mark before publish. That is the lost-event direction.
 ---
 
 ## 11. Idempotent consumer — inbox first, then rank guard
+
+**Description.** The consumer inserts the deterministic `message_id` into an inbox table with `ON CONFLICT DO NOTHING`, then loads and locks tenant then task, applies the rank guard, and updates task and tenant in one transaction. The inbox deduplicates the same logical message; the rank guard rejects different messages that arrive out of order. Both are needed, and the ack happens only after commit.
 
 ```go
 func (s *Service) ApplyTaskUpdate(ctx context.Context, u TaskUpdate) (ApplyResult, error) {
@@ -660,6 +682,8 @@ ignores the claimed ID. That is a blast-radius defense.
 
 ## 12. Consumer ack policy and failure classification
 
+**Description.** Ack only after the database transaction commits; a lost ack produces a redelivery that the inbox makes harmless. Classify permanent failures (malformed JSON, unknown task, bad schema) as poison and dead-letter immediately, and transient failures (connection reset, timeout, pool exhaustion) as bounded retries. The broker's delivery limit is the outer bound.
+
 ```go
 if err := json.Unmarshal(delivery.Body, &wire); err != nil {
 	nack(delivery, false) // poison
@@ -709,6 +733,8 @@ the replay a no-op. Acking before commit can lose the update.
 ---
 
 ## 13. Table-driven tests
+
+**Description.** Table-driven tests put inputs and expected outputs in a slice of structs and run each case as a named subtest. The examples cover domain transitions, pagination helpers, a real-Postgres race test, and the handler shape. Integration tests should use real Postgres or RabbitMQ when the behavior being proved lives in the database or broker, not in a mock.
 
 ### Domain transition table
 

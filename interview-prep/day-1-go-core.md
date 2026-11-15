@@ -41,6 +41,8 @@ zero value can be a valid configuration. Design types so the zero value is usefu
 
 ### Slices are a 3-word header
 
+**Description.** A slice is a value containing a pointer to a backing array, a length, and a capacity. Assigning or passing a slice copies those three words, not the elements, so two slices can alias the same array. `append` writes into spare capacity when it can and allocates a new array when it cannot.
+
 A slice is `{pointer, len, cap}`. Copying a slice copies the header, not the elements.
 
 ```go
@@ -63,6 +65,8 @@ Useful rules:
 
 ### Maps
 
+**Description.** A map is a reference to a hash table with the zero value `nil`. Reads, `len`, `range`, and `delete` work on a nil map, but a write panics until it is initialized with `make` or a literal. Iteration order is deliberately randomized, and concurrent writes are a data race.
+
 ```go
 var m map[string]int // nil: reads and range are fine; writes panic
 m = make(map[string]int)
@@ -77,6 +81,8 @@ delete(m, "a")
 - A nil map is useful as a read-only/empty value; initialize before writing.
 
 ### Strings, bytes, runes
+
+**Description.** A string is an immutable byte sequence, normally UTF-8. Indexing returns a byte, `len` counts bytes, and `for range` decodes UTF-8 into runes with the byte offset. A rune is one Unicode code point stored as an `int32`; C# and JavaScript strings are UTF-16 code units, so the byte/rune split is an extra layer.
 
 Strings are immutable byte sequences, usually UTF-8.
 
@@ -95,6 +101,8 @@ for i, r := range s {     // i is the byte index, r is a rune
 
 ### Pointers and value semantics
 
+**Description.** Go passes every argument by value. A pointer is a value holding an address; passing a pointer copies the address, not the pointed-to object. Use a pointer to mutate a value, represent absence, or avoid copying a large struct. C# classes are reference types by default; in Go the `*` is always explicit.
+
 Go is pass-by-value. A pointer is also passed by value; it points at the same object.
 
 - Use a pointer when you need mutation, `nil` as "absent", or to avoid copying a large struct.
@@ -107,6 +115,8 @@ Go is pass-by-value. A pointer is also passed by value; it points at the same ob
 ## 2. Structs, interfaces, method sets
 
 ### Embedding is composition, not inheritance
+
+**Description.** Embedding puts one type inside another without a field name and promotes its exported fields and methods to the outer type. It is composition with forwarding, not subtyping: a `User` that embeds `Base` is not a `Base`, and there is no virtual dispatch.
 
 ```go
 type Base struct{ ID string }
@@ -125,6 +135,8 @@ or wants the full surface.
 
 ### Interfaces are implicit and should be small
 
+**Description.** An interface is a set of method signatures. A type satisfies it by implementing every method; there is no `implements` declaration, and the compiler checks method sets. Define interfaces at the consumer, keep them small, and return concrete types from constructors. C# requires an explicit interface declaration; Go's satisfaction is structural.
+
 ```go
 type Reader interface{ Read(p []byte) (int, error) }
 type Writer interface{ Write(p []byte) (int, error) }
@@ -138,6 +150,8 @@ type Writer interface{ Write(p []byte) (int, error) }
   implementations.
 
 ### Method sets: the pointer-receiver rule
+
+**Description.** The method set of `T` contains methods declared with a value receiver; the method set of `*T` contains both value- and pointer-receiver methods. Interface satisfaction uses the method set, so a pointer-receiver method is not available on a `T` stored in an interface.
 
 ```go
 type Counter struct{ n int }
@@ -153,6 +167,8 @@ var _ interface{ Inc() } = &Counter{} // OK
 - If a value implements an interface with a pointer-receiver method, pass `&v`.
 
 ### The nil-interface trap
+
+**Description.** An interface value is a pair of a dynamic type and a data value. It is nil only when both are nil. Assigning a typed nil pointer sets the type word, so the interface is non-nil even though the pointer is nil. Return an untyped `nil` when there is no error.
 
 An interface value is `(type, value)`. It is nil only when **both** are nil.
 
@@ -179,6 +195,8 @@ func mayFail() error {
 
 ### Type assertions and type switches
 
+**Description.** A type assertion extracts the concrete type from an interface. The comma-ok form returns `false` instead of panicking; the single-value form panics on a mismatch. A type switch dispatches on the dynamic type and binds a typed variable in each case. For errors, `errors.As` is usually better because it walks the wrap chain.
+
 ```go
 if s, ok := v.(string); ok { ... }       // safe assertion
 switch x := v.(type) {
@@ -191,6 +209,8 @@ default: ...
 Use `errors.As` for errors, not a type assertion, because it unwraps.
 
 ### Generics: use them when the algorithm is the same
+
+**Description.** Generics parameterize a function or type by type parameters constrained to a set of allowed types. The compiler checks each instantiation, so there is no runtime reflection. Use them when the algorithm is identical across types; use an interface when the behavior differs. C# generics are the closest model, but Go has no generic methods.
 
 ```go
 func Map[T, U any](in []T, f func(T) U) []U {
@@ -210,6 +230,8 @@ interface, or inventing type-level abstractions the codebase does not need. Go f
 ## 3. Errors, defer, panic
 
 ### Errors are values
+
+**Description.** An error is an interface value with an `Error() string` method, returned as an ordinary result. A sentinel error is compared by identity, a typed error carries fields, and wrapping with `%w` preserves the original in a chain that `errors.Is` and `errors.As` can inspect. C# and JavaScript throw exceptions; Go makes failure explicit in the signature.
 
 ```go
 var ErrNotFound = errors.New("not found")
@@ -236,6 +258,8 @@ if errors.Is(err, ErrNotFound) { ... }
 
 ### `errors.As` needs a pointer to the target type
 
+**Description.** `errors.As` walks the wrap chain looking for an error assignable to the target type. The second argument must be a non-nil pointer to the target so the function can write the found value into it. Use it when you need fields from a typed error, not just identity.
+
 ```go
 var derr *domain.Error
 if errors.As(err, &derr) {
@@ -247,6 +271,8 @@ if errors.As(err, &derr) {
 `error` (or be an interface).
 
 ### `defer` is LIFO and runs on panic
+
+**Description.** `defer` registers a call to run when the surrounding function returns, including during a panic. Deferred calls run last-in, first-out, and their arguments are evaluated at the `defer` statement. A deferred closure can modify named return values because it runs after they are assigned.
 
 ```go
 func f() (n int) {
@@ -262,6 +288,8 @@ func f() (n int) {
 - Do not defer inside a long loop unless the function ends soon; defers accumulate.
 
 ### Panic and recover
+
+**Description.** `panic` stops normal execution and unwinds the stack, running deferred calls. `recover` stops the unwind only when called directly from a deferred function in the panicking goroutine. Panic is for programmer errors and impossible states; expected failures should be returned as errors.
 
 Use `panic` for programmer bugs or truly unrecoverable state, not expected failures. Recover only at
 a boundary (HTTP middleware, worker delivery handler) so one bad request/message does not kill the
@@ -284,6 +312,8 @@ func safe(fn func()) (err error) {
 ## 4. Testing and tooling
 
 ### Table-driven tests
+
+**Description.** A table-driven test stores inputs and expected outputs in a slice of structs and loops over it, using `t.Run` to create a named subtest per case. Adding a case is one struct literal, and a failure names the case. C# `[Theory]` and Jest `test.each` serve the same purpose.
 
 ```go
 func TestTaskUpdateAllowed(t *testing.T) {
@@ -316,6 +346,8 @@ func TestTaskUpdateAllowed(t *testing.T) {
 
 ### Commands
 
+**Description.** The `go` command is the build, test, format, and dependency tool. `gofmt` formats, `go vet` catches suspicious constructs, `go test -race` runs the race detector, and `-count=1` disables the test cache. These commands belong in CI and in local review, not just in an IDE.
+
 ```bash
 gofmt -l .                 # should print nothing
 go vet ./...               # should print nothing
@@ -326,6 +358,8 @@ go test ./... -cover
 ```
 
 ### Modules and embedding
+
+**Description.** A module is a versioned collection of packages described by `go.mod`; `go mod tidy` synchronizes dependencies. `internal/` restricts imports to the module, build tags split files by environment, and `//go:embed` copies file contents into the binary at build time. C# uses NuGet and JavaScript uses `package.json`; Go keeps the module file in the repository and the toolchain in the `go` command.
 
 ```go
 import _ "embed"
@@ -503,9 +537,31 @@ where the transaction boundary is. That keeps transaction ownership in the servi
 
 </details>
 
+### Rapid answer key
+
+Use this after answering aloud. The full explanation is in the expanded answer above; the lesson
+reference points to the denser section.
+
+| # | Question | Model answer | Section |
+|---|---|---|---|
+| Q1 | What is a zero value, and why does it matter in API design? | Every type has a defined zero value, so a variable is never undefined. A useful zero value removes the need for a constructor; `0`, `""`, and `nil` are ambiguous in JSON without a pointer or presence flag. | §1 |
+| Q2 | Nil slice vs empty slice? | Both have length zero and work with `append`/`range`. A nil slice marshals to `null`; an empty slice marshals to `[]`. Use `[]T{}` when the contract promises an array. | §1 |
+| Q3 | Why can `append` mutate the caller's slice? | A slice is a header pointing at a backing array. With spare capacity, `append` writes into the shared array; past capacity it allocates a new one. Always use the returned slice and copy for isolation. | §1 |
+| Q4 | When does a map write panic? | Writing to a nil map panics. Concurrent writes, or a write concurrent with a read, are a data race and can panic. Reads from a nil map are safe. | §1 |
+| Q5 | Value receiver vs pointer receiver? | Use a pointer receiver when the method mutates, the struct is large, or nil is meaningful. Use a value receiver for small immutable values, and be consistent per type. | §2 |
+| Q6 | Why is a typed nil pointer not equal to a nil error? | An interface stores a type and a value. A nil `*MyError` gives the interface the type `*MyError`, so it is non-nil even though the pointer is nil. Return an untyped `nil`. | §2 |
+| Q7 | `errors.Is` vs `errors.As`? | `errors.Is` compares against a value or sentinel through the wrap chain. `errors.As` searches for a type and assigns it to a target. Use `Is` for identity, `As` for fields. | §3 |
+| Q8 | Why wrap with `%w` instead of `%v`? | `%w` preserves the original error in the chain so `errors.Is`/`errors.As` still work. `%v` formats the message and discards identity. Wrap at boundaries with new context. | §3 |
+| Q9 | When is `panic` acceptable? | For programmer errors and impossible states, or during init. Not for expected I/O failures, validation, or not-found. Recover at process boundaries. | §3 |
+| Q10 | Why can a deferred function change a named return value? | Named results are variables in the function's scope. The deferred closure runs after they are assigned but before the function returns, so it can modify them. | §3 |
+| Q11 | When should you not use generics? | When an interface expresses the behavior better, there is only one concrete type, or the abstraction adds type parameters without removing real duplication. | §2 |
+| Q12 | Why does ControlPlane define `store.DB`? | `*pgxpool.Pool` and `pgx.Tx` both satisfy `Exec`, `Query`, and `QueryRow`. A function taking `DB` can run standalone or inside a caller-owned transaction, so the service keeps transaction ownership. | §7 |
+
 ---
 
 ## 7. ControlPlane tie-in — where Day 1 shows up
+
+**Description.** This section introduces no new language feature; it maps the Day 1 concepts to ControlPlane's boundaries. Typed domain errors carry stable codes, `errors.As` translates them at the HTTP edge, `store.DB` lets one query run on a pool or a transaction, and `//go:embed` ships the schema inside the binary.
 
 | Concept                     | File                                                                                                   | Why it matters                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |

@@ -22,6 +22,8 @@ Do not let this push the core past two hours.
 
 ## 1. The mapping table
 
+**Description.** This table maps each ControlPlane piece to an AWS building block and names the tradeoff. The goal is not a full AWS redesign; it is to show that the correctness mechanisms stay in Postgres while AWS changes the compute, transport, and operations. The one-sentence version is the answer to "how would you deploy this?"
+
 | ControlPlane piece | AWS option | Why / tradeoff |
 |---|---|---|
 | Go API process | ECS Fargate service behind ALB | Long-lived HTTP, simple container, no server management |
@@ -97,6 +99,8 @@ Key points to say:
 
 ### SQS
 
+**Description.** SQS is a managed queue with at-least-once delivery. Standard queues prioritize throughput and best-effort ordering; FIFO queues add per-`MessageGroupId` ordering and deduplication within a five-minute window. A received message is hidden for the visibility timeout rather than deleted, so a crashed consumer causes redelivery after the timeout. There are no exchanges or routing keys; fan-out is SNS to multiple queues.
+
 - Standard: at-least-once, best-effort ordering, nearly unlimited throughput.
 - FIFO: ordering per `MessageGroupId`, dedup ID within a 5-minute window, lower throughput.
 - Visibility timeout: a received message is hidden, not deleted; if the consumer crashes, it reappears
@@ -127,12 +131,16 @@ delivery and duplicate terminal updates.
 
 ### RabbitMQ (Amazon MQ)
 
+**Description.** Amazon MQ for RabbitMQ is the closest lift-and-shift for ControlPlane because it preserves exchanges, routing keys, per-message ack/nack, requeue, DLX, and priorities. It has more operational surface than SQS: Amazon manages the broker, but you still own topology, queue type, and tuning. It fits when routing and poison-message semantics are core rather than incidental.
+
 - Exchanges, routing keys, per-message ack/nack, requeue, DLX, priorities.
 - Quorum queues for durability/replication; check the Amazon MQ engine version and feature support.
 - More operational surface than SQS; Amazon MQ manages brokers but you still own topology and tuning.
 - Best when the routing model and poison/requeue semantics are core, as in ControlPlane.
 
 ### EventBridge
+
+**Description.** EventBridge is an event bus with rules, filtering, targets, archive/replay, and a schema registry. It is built for domain-event fan-out and integration, with at-least-once delivery and per-target retry/DLQ behavior. It is not a per-message work queue with ack and visibility semantics, so long provisioning work belongs on SQS or RabbitMQ.
 
 - Event bus with rules, filtering, targets, archive/replay, schema registry.
 - At-least-once delivery; targets have their own retry/DLQ behavior.
@@ -169,12 +177,16 @@ Use this to answer "have you built serverless?" without turning the Go notebook 
 
 ### DynamoDB in one paragraph
 
+**Description.** DynamoDB is a key-value/document store where partition-key design is the schema. Conditional writes provide idempotency, `TransactWriteItems` covers small multi-item invariants, TTL expires items, streams emit changes, and GSIs serve alternate access patterns. It scales well by key, but it is not a general relational constraint engine; unique-slug or one-open-task invariants are simpler in Postgres.
+
 Partition key design is the schema. Use conditional writes for idempotency (`attribute_not_exists(pk)`),
 `TransactWriteItems` for small multi-item invariants, TTL for expiry, streams for change events, and GSIs
 for access patterns. It is excellent at key-based scale; it is not a general relational constraint engine.
 If the invariant is "one open task per tenant" or "unique slug forever", Postgres is the simpler arbiter.
 
 ### Lambda + RDS
+
+**Description.** Each concurrent Lambda invocation may open its own database connection, so a relational database needs RDS Proxy or a small pool to avoid connection exhaustion. Cold starts affect latency, not correctness. VPC-attached Lambdas need NAT or VPC endpoints for AWS APIs, and long-running work should move to ECS or Step Functions rather than fight the 15-minute limit.
 
 - Each concurrent invocation can open a connection; use RDS Proxy or a small pool.
 - Cold starts matter for latency, not correctness.
@@ -183,6 +195,8 @@ If the invariant is "one open task per tenant" or "unique slug forever", Postgre
 - Async invocation failures go to a DLQ/destination; configure it.
 
 ### Partial batch failures
+
+**Description.** An SQS-triggered Lambda receives a batch, but only some records may fail. Returning `batchItemFailures` tells SQS to retry just those message IDs instead of the whole batch, which is the serverless analogue of acking each message after its transaction commits. Without it, one poison record causes the entire batch to be redelivered.
 
 ```json
 { "batchItemFailures": [ { "itemIdentifier": "message-id-1" } ] }
@@ -197,6 +211,8 @@ of ack-after-commit per message.
 
 ### Identity
 
+**Description.** An ECS task role grants the running application its AWS permissions; the execution role is for the agent that pulls images and writes logs at launch. Give each service least privilege: the API can read/write RDS and publish, the worker can consume and publish, and neither can delete the database. Per-tenant authorization is an application concern, and the tenant ID must come from the token, not the request body.
+
 - ECS **task role** for the app's AWS permissions; **execution role** for ECR/logs/secrets at launch.
 - Least privilege per service: API can read/write RDS + publish; worker can consume + publish; neither
   can delete the database.
@@ -205,6 +221,8 @@ of ack-after-commit per message.
 
 ### Network
 
+**Description.** Put the ALB in public subnets and the tasks and RDS in private subnets. Security groups should allow only the edges you need: ALB to API on 8080, API to RDS on 5432, and API/worker to the broker on 5671/5672. VPC endpoints for ECR, S3, CloudWatch, and Secrets Manager avoid NAT data charges, and TLS should terminate at the ALB with optional re-encryption inside.
+
 - ALB in public subnets; tasks and RDS in private subnets.
 - Security groups: ALB → API only on 8080; API → RDS only on 5432; API/worker → MQ only on 5671/5672.
 - VPC endpoints for ECR, S3, CloudWatch, Secrets Manager to avoid NAT data charges.
@@ -212,11 +230,15 @@ of ack-after-commit per message.
 
 ### Secrets
 
+**Description.** Store database and broker credentials in Secrets Manager or SSM Parameter Store, with rotation for database credentials. Do not bake secrets into images, commit them to the repository, or leave them in plaintext Terraform state. Use separate secrets per environment so a staging credential cannot open production.
+
 - Secrets Manager with rotation for DB credentials; no `guest/guest`.
 - Do not bake secrets into images or Terraform state in plaintext.
 - Separate secrets per environment.
 
 ### Observability
+
+**Description.** Emit structured JSON logs with request, tenant, task, and message IDs so one trace crosses HTTP, database, broker, and consumer. Track request rate/latency/errors, oldest unpublished outbox age, relay failures, DLQ depth, consumer lag, task age, and database connections/lock waits. Alarm on user-visible symptoms, not on dashboards, and propagate correlation IDs through traces.
 
 - Structured JSON logs with request ID, tenant ID, task ID, message ID.
 - Metrics: request rate/latency/error by code; outbox oldest unpublished age; relay publish failures; DLQ
@@ -227,6 +249,8 @@ of ack-after-commit per message.
 
 ### Deployment and DR
 
+**Description.** Deploy immutable image tags with health checks and rolling or blue-green rollout. Run migrations as a one-off task using an expand → migrate → contract sequence; `CREATE IF NOT EXISTS` is not a production migration strategy. Define RPO/RTO, use RDS automated backups plus PITR and Multi-AZ, keep cross-region snapshots, and test the restore rather than assuming the backup works.
+
 - Immutable image tags; scan on push; deploy with health checks and rolling/blue-green.
 - Migrations: run as a one-off task with a backward-compatible sequence (expand → migrate → contract).
   `CREATE IF NOT EXISTS` is not enough for production.
@@ -235,6 +259,8 @@ of ack-after-commit per message.
 - Runbooks for broker down, DB failover, DLQ replay, stuck tasks.
 
 ### Cost
+
+**Description.** The main cost drivers are NAT Gateway data processing, Amazon MQ broker hours, RDS Multi-AZ, and idle Fargate tasks. Right-size tasks, autoscale on queue depth or CPU, and use Savings Plans for steady load. SQS and EventBridge are cheap per request but not free at volume, and CloudWatch log ingestion adds up; set budgets and alarms instead of discovering the bill.
 
 - NAT Gateway data processing; Amazon MQ broker hours; RDS Multi-AZ; idle Fargate tasks.
 - Right-size tasks; autoscale on queue depth/CPU; use Savings Plans for steady load.
@@ -356,6 +382,23 @@ metrics/tracing; per-tenant rate limits; auth/RBAC/TLS; worker DLQ and delivery 
 change the scale knobs.
 
 </details>
+
+### Rapid answer key
+
+| # | Question | Model answer | Section |
+|---|---|---|---|
+| 1 | How would you deploy ControlPlane on AWS? | ECR images on ECS Fargate in private subnets, ALB for the API, RDS Postgres Multi-AZ, Amazon MQ or SQS, Secrets Manager, task roles, CloudWatch, Terraform; the outbox and inbox stay unchanged. | §2 |
+| 2 | Why not Lambda for the worker? | Provisioning is long-running; Lambda has a 15-minute limit, cold starts, and per-invocation DB connections. A warm ECS service gives controlled concurrency. | §2 |
+| 3 | SQS or RabbitMQ? | RabbitMQ when exchanges, routing, and DLX semantics matter; SQS plus a DLQ when the model can be simpler; FIFO only for hard per-tenant ordering. | §3 |
+| 4 | Does SQS replace the outbox? | No. RDS and SQS have no shared transaction; the outbox still makes publish-after-commit structural and the inbox absorbs duplicates. | §3 |
+| 5 | How do you handle poison messages in SQS? | Use a redrive policy with `maxReceiveCount` to a DLQ, classify permanent errors immediately, alarm on DLQ depth, and return `batchItemFailures` from Lambda. | §3 |
+| 6 | How do you get ordering with SQS? | Use a FIFO queue with `MessageGroupId = tenant_id`; ordering is per group, not global, and the rank guard still handles reordering. | §3 |
+| 7 | How do you secure multi-tenant access? | JWT/Cognito at the edge, tenant ID from claims, tenant scoping on every query, least-privilege task roles, private subnets, TLS, and per-tenant quotas. | §5 |
+| 8 | How do you monitor this system? | Track request errors by code, oldest unpublished outbox age, relay failures, DLQ depth, consumer lag, task age, and DB lock waits; alarm on stuck tenants and DLQ growth. | §5 |
+| 9 | How do you migrate the schema? | Versioned migrations in CI as a one-off ECS task, using expand → migrate → contract, with a backup and rollback plan; not `CREATE IF NOT EXISTS`. | §5 |
+| 10 | What is your DR plan? | Define RPO/RTO, use RDS backups plus PITR and Multi-AZ, keep cross-region snapshots, rebuild with Terraform, replay the outbox, and test restore and failover. | §5 |
+| 11 | How do you handle long-running provisioning? | Commit intent, return 202, let an ECS or Step Functions worker report progress, and add a lease/heartbeat plus reaper for stuck tasks. | §3 |
+| 12 | What would you change at 10x? | Split relay and consumer services, batch confirms, shard by tenant, add a reaper, archive outbox rows, expire inbox rows, add metrics, auth, rate limits, and a worker DLQ. | §5 |
 
 ---
 
